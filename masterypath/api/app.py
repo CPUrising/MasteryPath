@@ -8,6 +8,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, WebSocket
 
 from masterypath.agents.llm import DeepSeekClient
 from masterypath.agents.loop import AgentLoop
+from masterypath.agents.task_model import TaskModel
 from masterypath.capabilities.mastery import mode as mode_policy
 from masterypath.capabilities.mastery.tools import TOOLS, ToolContext
 from masterypath.learning.outline import OutlineError
@@ -28,6 +29,7 @@ def create_app(
     )
     app.state.session_modes: dict[str, str] = {}
     app.state.client_factory = client_factory or (lambda: DeepSeekClient())
+    task_model = TaskModel(client_factory=app.state.client_factory)
 
     def _require_outline(session_id: str) -> None:
         current = app.state.session_modes.get(session_id)
@@ -139,6 +141,13 @@ def create_app(
     @app.get("/learning/paths/{path_id}/events")
     def events(path_id: str, since: int = 0) -> list[dict]:
         return store.events_since(path_id, since)
+
+    @app.get("/learning/paths/{path_id}/suggest-question")
+    def suggest_question(path_id: str) -> dict:
+        state = service.get_state(path_id)
+        if state["status"] == "missing":
+            raise HTTPException(status_code=404, detail="unknown path")
+        return {"suggestion": task_model.suggest_question(state)}
 
     # -- question bank (M6) ------------------------------------------------
     @app.get("/learning/paths/{path_id}/questions")
