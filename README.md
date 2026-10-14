@@ -76,6 +76,21 @@ python -m venv .venv
 
 - `mastery_assess` 是 concept/design 的开门方式；选择题判分**不会**打开它们（`INV-05`）。
 
+## M5 覆盖（review + 简化间隔复习 SM-2）
+
+| 内容 | 状态 |
+| --- | --- |
+| SM-2 间隔序列 1/6/15/38/95、EF 更新与下限 `TC-G1` | ✅ |
+| failure 进入重学步、`lapse_count+1`、`scheduled_after_failure=True` `TC-G2` | ✅ |
+| 失败后下次成功清除标志、走正常序列 `TC-G3` | ✅ |
+| 会话内练习只改 `last_review_at`、不动锚点 `TC-G4` | ✅ |
+| 声明轨首间隔约为系统轨 0.5（∈[0.3,0.7]）`TC-G5` | ✅ |
+| 掌握→播种 `RepetitionState`+`review_queue`；到期→`next_objective` 返回 review；review 判分重排 | ✅ |
+
+- 新增 `learning/scheduler.py`（纯 SM-2）；`service` 在掌握时播种、review 判分重排、会话内练习只 touch。
+- 单调度器、按 provenance 播种（ADR-002）；算法 SM-2，FSRS 字段仅展示（`INV-31`）。
+- 未纳入 M5：`scenario` 场景预设（二期）；跨会话「同一天多练不清零」的会话判定属后续细化。
+
 ## 运行
 
 ```powershell

@@ -293,6 +293,7 @@ class MasteryGradeTool:
                 question_id,
                 answer,
                 hints_used=hints,
+                review=mode.enforced_mode(ctx.session_mode) == mode.REVIEW,
                 session_id=ctx.session_id,
                 turn_id=ctx.turn_id,
             )
@@ -402,6 +403,7 @@ class MasteryAssessTool:
                 passed=passed,
                 evidence=str(params.get("evidence") or ""),
                 quality=params.get("quality"),
+                review=mode.enforced_mode(ctx.session_mode) == mode.REVIEW,
                 session_id=ctx.session_id,
                 turn_id=ctx.turn_id,
             )

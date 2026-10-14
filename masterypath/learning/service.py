@@ -7,9 +7,10 @@ together (INV-51). Knows nothing about LLMs (ADR-014).
 from __future__ import annotations
 
 from typing import Any
+import time
 import uuid
 
-from masterypath.learning import grading, mastery, policy
+from masterypath.learning import grading, mastery, policy, scheduler
 from masterypath.learning.models import (
     AssessmentResult,
     AssessmentType,
@@ -139,11 +140,18 @@ class LearningService:
             kp, _ = tx.progress.find_knowledge_point(kp_id)
             tx.require(kp is not None, f"unknown knowledge point: {kp_id}")
             assert kp is not None
+            was_mastered = policy.is_mastered(tx.progress, kp)
             tx.progress.learner_mastery_overrides[kp_id] = LearnerMasteryOverride(
                 knowledge_point_id=kp_id, note=note
             )
+            gate_cleared = policy.is_mastered(tx.progress, kp) and not was_mastered
+            if gate_cleared:
+                _schedule_after(
+                    tx, kp, result="correct", hints_used=0, review=False,
+                    gate_cleared=True, source="learner",
+                )
             tx.emit("mastery.override", {"knowledge_point_id": kp_id, "note": note})
-            return {"knowledge_point_id": kp_id, "source": "learner"}
+            return {"knowledge_point_id": kp_id, "source": "learner", "gate_cleared": gate_cleared}
 
         return self.store.mutate(path_id, fn)
 
@@ -193,6 +201,7 @@ class LearningService:
         answer: str,
         *,
         hints_used: int = 0,
+        review: bool = False,
         session_id: str = "",
         turn_id: str = "",
     ) -> dict[str, Any]:
@@ -228,6 +237,7 @@ class LearningService:
 
             was_mastered = policy.is_mastered(tx.progress, kp)
             before = float(tx.progress.mastery_levels.get(kp.id, 0.0))
+            evidence_id = uuid.uuid4().hex
             tx.progress.quiz_attempts.append(
                 QuizAttempt(
                     question_id=pending.question_id,
@@ -240,10 +250,10 @@ class LearningService:
             )
             tx.progress.learning_evidence.append(
                 LearningEvidence(
-                    evidence_id=uuid.uuid4().hex,
+                    evidence_id=evidence_id,
                     question_id=pending.question_id,
                     knowledge_point_id=kp.id,
-                    assessment_type=AssessmentType.QUIZ,
+                    assessment_type=AssessmentType.REVIEW if review else AssessmentType.QUIZ,
                     result=AssessmentResult(result),
                     hints_used=hints_used,
                     session_id=session_id,
@@ -257,6 +267,11 @@ class LearningService:
                 )
             after = float(tx.progress.mastery_levels.get(kp.id, 0.0))
             gate_cleared = policy.is_mastered(tx.progress, kp) and not was_mastered
+            source = policy.mastery_source(tx.progress, kp)
+            _schedule_after(
+                tx, kp, result=result, hints_used=hints_used, review=review,
+                gate_cleared=gate_cleared, source=source, evidence_id=evidence_id,
+            )
             tx.progress.pending_question = None
 
             payload = {
@@ -267,7 +282,7 @@ class LearningService:
                 "mastery_before": before,
                 "mastery_after": after,
                 "gate_cleared": gate_cleared,
-                "source": policy.mastery_source(tx.progress, kp),
+                "source": source,
                 "explanation": pending.explanation,
             }
             current.status = InteractionStatus.GRADED
@@ -302,6 +317,7 @@ class LearningService:
         passed: bool,
         evidence: str = "",
         quality: float | None = None,
+        review: bool = False,
         session_id: str = "",
         turn_id: str = "",
     ) -> dict[str, Any]:
@@ -321,9 +337,10 @@ class LearningService:
             )
             was_mastered = policy.is_mastered(tx.progress, kp)
             tx.progress.qualitative_mastery[kp_id] = bool(passed)
+            evidence_id = uuid.uuid4().hex
             tx.progress.learning_evidence.append(
                 LearningEvidence(
-                    evidence_id=uuid.uuid4().hex,
+                    evidence_id=evidence_id,
                     knowledge_point_id=kp_id,
                     assessment_type=AssessmentType.QUALITATIVE,
                     result=AssessmentResult.CORRECT if passed else AssessmentResult.PARTIAL,
@@ -335,6 +352,12 @@ class LearningService:
                 )
             )
             gate_cleared = policy.is_mastered(tx.progress, kp) and not was_mastered
+            source = policy.mastery_source(tx.progress, kp)
+            _schedule_after(
+                tx, kp, result="correct" if passed else "incorrect", hints_used=0,
+                review=review, gate_cleared=gate_cleared, source=source,
+                evidence_id=evidence_id,
+            )
             if tx.progress.pending_question and (
                 tx.progress.pending_question.knowledge_point_id == kp_id
             ):
@@ -344,7 +367,7 @@ class LearningService:
                 "knowledge_point_id": kp_id,
                 "passed": bool(passed),
                 "gate_cleared": gate_cleared,
-                "source": policy.mastery_source(tx.progress, kp),
+                "source": source,
             }
             tx.emit(
                 "qualitative.assessed",
@@ -353,7 +376,7 @@ class LearningService:
             if gate_cleared:
                 tx.emit(
                     "objective.mastered",
-                    {"knowledge_point_id": kp_id, "source": payload["source"]},
+                    {"knowledge_point_id": kp_id, "source": source},
                 )
             return payload
 
@@ -394,6 +417,54 @@ class LearningService:
             return {"knowledge_point_id": kp_id, "deferred": True}
 
         return self.store.mutate(path_id, fn)
+
+
+def _schedule_after(
+    tx,
+    kp,
+    *,
+    result: str,
+    hints_used: int,
+    review: bool,
+    gate_cleared: bool,
+    source: str,
+    evidence_id: str = "",
+) -> None:
+    """Seed a new schedule, reschedule a review, or only touch practice time."""
+    now = time.time()
+    if gate_cleared:
+        state = scheduler.initial_state(provenance=source or "system", now=now)
+        tx.progress.repetition_states[kp.id] = state
+        scheduler.upsert_review_task(
+            tx.progress, kp, state, evidence_source="mastery_path", evidence_id=evidence_id
+        )
+        tx.emit(
+            "review.scheduled",
+            {
+                "knowledge_point_id": kp.id,
+                "next_review_at": state.next_review_at,
+                "interval_index": state.interval_index,
+                "provenance": state.provenance,
+            },
+        )
+    elif review and kp.id in tx.progress.repetition_states:
+        state = tx.progress.repetition_states[kp.id]
+        scheduler.apply_review(state, result=result, hints_used=hints_used, now=now)
+        scheduler.upsert_review_task(
+            tx.progress, kp, state, evidence_source="mastery_path", evidence_id=evidence_id
+        )
+        tx.emit(
+            "review.scheduled",
+            {
+                "knowledge_point_id": kp.id,
+                "next_review_at": state.next_review_at,
+                "interval_index": state.interval_index,
+                "scheduled_after_failure": state.scheduled_after_failure,
+            },
+        )
+    elif kp.id in tx.progress.repetition_states:
+        # Practice on an already-mastered objective: touch time, keep anchor.
+        scheduler.touch_last_review(tx.progress.repetition_states[kp.id], now=now)
 
 
 def _public(pending) -> dict[str, Any]:
