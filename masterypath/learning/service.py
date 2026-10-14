@@ -23,6 +23,7 @@ from masterypath.learning.models import (
     MasteryInteraction,
     QuizAttempt,
     QuestionBankEntry,
+    TopicSource,
 )
 from masterypath.learning.outline import (
     BuildResult,
@@ -53,6 +54,34 @@ class LearningService:
         progress = LearningProgress(path_id=path_id, goal=goal, name=name)
         return self.store.create(progress)
 
+    def _source_context(self, progress: LearningProgress) -> tuple[dict[str, str], set[str]]:
+        """Derive the build/revise source map: explicit overrides, else stored sources."""
+        from masterypath.knowledge.loader import build_source_map, selected_source_ids
+
+        source_map = (
+            self.source_map
+            if self.source_map is not None
+            else build_source_map(progress.sources)
+        )
+        selected = (
+            self.selected_source_ids
+            if self.selected_source_ids is not None
+            else selected_source_ids(progress.sources)
+        )
+        return source_map, selected
+
+    def attach_sources(
+        self, path_id: str, sources: list[TopicSource]
+    ) -> list[dict[str, Any]]:
+        """Replace the path's selected sources (e.g. a scanned folder)."""
+
+        def fn(tx):
+            tx.progress.sources = list(sources)
+            tx.emit("sources.attached", {"count": len(sources)})
+            return [source.model_dump() for source in tx.progress.sources]
+
+        return self.store.mutate(path_id, fn, create_if_missing=True)
+
     def get_state(self, path_id: str) -> dict[str, Any]:
         progress = self.store.load(path_id)
         if progress is None:
@@ -66,6 +95,7 @@ class LearningService:
             "version": progress.version,
             "map": policy.map_summary(progress),
             "next": step.to_dict(),
+            "sources": [source.model_dump() for source in progress.sources],
             "gaps": [gap.model_dump() for gap in progress.source_gaps],
             "pending_question": progress.pending_question
             and _public(progress.pending_question),
@@ -83,12 +113,13 @@ class LearningService:
         turn_id: str = "",
     ) -> BuildResult:
         def fn(tx):
+            smap, selected = self._source_context(tx.progress)
             result = build_outline(
                 tx.progress,
                 payload,
                 confirm=confirm,
-                source_map=self.source_map,
-                selected_source_ids=self.selected_source_ids,
+                source_map=smap,
+                selected_source_ids=selected,
             )
             if result.status == "built":
                 event_type = "path.rebuilt" if result.rebuilt else "outline.built"
@@ -112,8 +143,9 @@ class LearningService:
         turn_id: str = "",
     ) -> ReviseResult:
         def fn(tx):
+            _, selected = self._source_context(tx.progress)
             result = revise_outline(
-                tx.progress, ops, selected_source_ids=self.selected_source_ids
+                tx.progress, ops, selected_source_ids=selected
             )
             tx.emit(
                 "outline.revised",

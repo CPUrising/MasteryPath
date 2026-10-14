@@ -116,6 +116,19 @@ python -m venv .venv
 | 异常回退：provider 报错时退回本地建议 | ✅ |
 | `GET /learning/paths/{id}/suggest-question`（草稿，Tab 采纳，不自动发送） | ✅ |
 
+## 本地文件夹知识库（来源加载）
+
+| 内容 | 状态 |
+| --- | --- |
+| `knowledge/loader.py`：递归扫描文件夹 → `TopicSource`（`id/label/excerpt`） | ✅ |
+| `read_text`（txt/md，UTF-8 容错）、`build_source_map`（label + 唯一 basename 别名） | ✅ |
+| `service.attach_sources`；`build/revise` 从已存 sources 派生 source_map | ✅ |
+| REST：`POST /learning/paths/{id}/sources`、`GET .../sources` | ✅ |
+| 接入后缺口自动生效：文件没用上→`source_omission`；KP 无来源→`goal_gap` | ✅ |
+
+- 仅 `.txt/.md`（无额外依赖）；PDF/DOCX 可后续在同一接口后扩展。
+- 来源的 `excerpt` 供大纲提示词使用；`label` 是大纲 `materials/sources` 引用的键。
+
 ## 运行
 
 ```powershell

@@ -14,6 +14,7 @@ from masterypath.capabilities.mastery.tools import TOOLS, ToolContext
 from masterypath.learning.outline import OutlineError
 from masterypath.learning.service import LearningService
 from masterypath.learning.storage import LearningStore, PreconditionError
+from masterypath.knowledge.loader import scan_folder
 
 
 def create_app(
@@ -133,6 +134,25 @@ def create_app(
         if state["status"] == "missing":
             raise HTTPException(status_code=404, detail="unknown path")
         return state["map"]
+
+    # -- knowledge base (folder sources) ----------------------------------
+    @app.post("/learning/paths/{path_id}/sources")
+    def attach_sources(path_id: str, payload: dict[str, Any] = Body(...)) -> list[dict]:
+        folder = str(payload.get("folder") or "")
+        if not folder:
+            raise HTTPException(status_code=422, detail="folder required")
+        try:
+            sources = scan_folder(folder)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return service.attach_sources(path_id, sources)
+
+    @app.get("/learning/paths/{path_id}/sources")
+    def list_sources(path_id: str) -> list[dict]:
+        state = service.get_state(path_id)
+        if state["status"] == "missing":
+            raise HTTPException(status_code=404, detail="unknown path")
+        return state["sources"]
 
     @app.get("/learning/paths/{path_id}/review-queue")
     def review_queue(path_id: str) -> list:

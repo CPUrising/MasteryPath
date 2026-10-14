@@ -368,6 +368,8 @@ class LearningProgress(BaseModel):
     path_id: str
     name: str = ""
     goal: str = ""
+    # Selected sources (files/folders). Labels are what build payloads reference.
+    sources: list["TopicSource"] = Field(default_factory=list)
     modules: list[LearningModule] = Field(default_factory=list)
     current_module_id: str = ""
     current_kp_index: int = 0
