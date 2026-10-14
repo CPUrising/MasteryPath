@@ -7,12 +7,20 @@ together (INV-51). Knows nothing about LLMs (ADR-014).
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
-from masterypath.learning import policy
+from masterypath.learning import grading, mastery, policy
 from masterypath.learning.models import (
+    AssessmentResult,
+    AssessmentType,
+    DeferredObjective,
+    InteractionStatus,
+    LearningEvidence,
     KnowledgeType,
     LearnerMasteryOverride,
     LearningProgress,
+    MasteryInteraction,
+    QuizAttempt,
 )
 from masterypath.learning.outline import (
     BuildResult,
@@ -21,7 +29,7 @@ from masterypath.learning.outline import (
     resolve_gap,
     revise_outline,
 )
-from masterypath.learning.storage import LearningStore
+from masterypath.learning.storage import LearningStore, PreconditionError
 
 
 class LearningService:
@@ -136,6 +144,189 @@ class LearningService:
             )
             tx.emit("mastery.override", {"knowledge_point_id": kp_id, "note": note})
             return {"knowledge_point_id": kp_id, "source": "learner"}
+
+        return self.store.mutate(path_id, fn)
+
+    # -- questions / grading (M3) -----------------------------------------
+    def register_question(
+        self,
+        path_id: str,
+        pending,
+        *,
+        session_id: str = "",
+        turn_id: str = "",
+    ):
+        """Register a posed question. Returns the interaction, or ``None`` when
+        one is already open (single slot, INV-02)."""
+        if self.store.get_open_interaction(path_id) is not None:
+            return None
+
+        def fn(tx):
+            if tx.get_open_interaction() is not None:
+                return None
+            tx.progress.pending_question = pending
+            interaction = MasteryInteraction(
+                interaction_id=pending.question_id,
+                path_id=path_id,
+                question=pending,
+                status=InteractionStatus.AWAITING_INPUT,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+            tx.save_interaction(interaction)
+            tx.emit(
+                "question.registered",
+                {
+                    "question_id": pending.question_id,
+                    "knowledge_point_id": pending.knowledge_point_id,
+                    "question_type": pending.question_type,
+                },
+            )
+            return interaction
+
+        return self.store.mutate(path_id, fn)
+
+    def grade(
+        self,
+        path_id: str,
+        question_id: str,
+        answer: str,
+        *,
+        hints_used: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> dict[str, Any]:
+        interaction = self.store.get_interaction(path_id, question_id)
+        if interaction is None:
+            raise PreconditionError(f"unknown question_id: {question_id}")
+        if interaction.status == InteractionStatus.GRADED:
+            return {**interaction.result, "status": "already_graded"}
+        if not interaction.is_open:
+            raise PreconditionError("interaction is not gradable")
+
+        decision = grading.grade(interaction.question, answer)
+        if decision.result == "ungraded":
+            # Zero state change (INV-46): never record a guess as an answer.
+            return {"status": "ungraded", "reason": decision.reason}
+
+        def fn(tx):
+            current = tx.get_interaction(question_id)
+            tx.require(current is not None, "unknown question_id")
+            if current.status == InteractionStatus.GRADED:
+                return {**current.result, "status": "already_graded"}
+            pending = current.question
+            kp, _ = tx.progress.find_knowledge_point(pending.knowledge_point_id)
+            tx.require(kp is not None, f"unknown objective: {pending.knowledge_point_id}")
+            assert kp is not None
+
+            result = decision.result
+            if pending.question_type == "open" and result == "correct":
+                result = "partial"  # open never grants mastery alone (INV-35)
+            if hints_used > 0 and result == "correct":
+                result = "partial"  # INV-36
+            is_correct = result == "correct"
+
+            was_mastered = policy.is_mastered(tx.progress, kp)
+            before = float(tx.progress.mastery_levels.get(kp.id, 0.0))
+            tx.progress.quiz_attempts.append(
+                QuizAttempt(
+                    question_id=pending.question_id,
+                    knowledge_point_id=kp.id,
+                    module_id=pending.module_id,
+                    is_correct=is_correct,
+                    user_answer=answer,
+                    independent=hints_used == 0,
+                )
+            )
+            tx.progress.learning_evidence.append(
+                LearningEvidence(
+                    evidence_id=uuid.uuid4().hex,
+                    question_id=pending.question_id,
+                    knowledge_point_id=kp.id,
+                    assessment_type=AssessmentType.QUIZ,
+                    result=AssessmentResult(result),
+                    hints_used=hints_used,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    source="mastery_path",
+                )
+            )
+            if kp.type not in policy.QUALITATIVE_TYPES:
+                tx.progress.mastery_levels[kp.id] = mastery.compute_mastery(
+                    policy.active_attempts(tx.progress, kp.id)
+                )
+            after = float(tx.progress.mastery_levels.get(kp.id, 0.0))
+            gate_cleared = policy.is_mastered(tx.progress, kp) and not was_mastered
+            tx.progress.pending_question = None
+
+            payload = {
+                "status": "graded",
+                "knowledge_point_id": kp.id,
+                "is_correct": is_correct,
+                "result": result,
+                "mastery_before": before,
+                "mastery_after": after,
+                "gate_cleared": gate_cleared,
+                "source": policy.mastery_source(tx.progress, kp),
+                "explanation": pending.explanation,
+            }
+            current.status = InteractionStatus.GRADED
+            current.user_answer = answer
+            current.result = payload
+            tx.save_interaction(current)
+            tx.emit(
+                "attempt.graded",
+                {
+                    "question_id": pending.question_id,
+                    "knowledge_point_id": kp.id,
+                    "is_correct": is_correct,
+                    "result": result,
+                    "hints_used": hints_used,
+                    "mastery_after": after,
+                },
+            )
+            if gate_cleared:
+                tx.emit(
+                    "objective.mastered",
+                    {"knowledge_point_id": kp.id, "source": payload["source"]},
+                )
+            return payload
+
+        return self.store.mutate(path_id, fn)
+
+    def skip_question(self, path_id: str, question_id: str, *, session_id: str = "", turn_id: str = ""):
+        def fn(tx):
+            current = tx.get_interaction(question_id)
+            tx.require(current is not None, "unknown question_id")
+            if current.is_terminal:
+                return {"status": current.status.value}
+            current.status = InteractionStatus.ABANDONED
+            tx.save_interaction(current)
+            tx.progress.pending_question = None
+            tx.emit("question.skipped", {"question_id": question_id})
+            return {"status": "abandoned", "question_id": question_id}
+
+        return self.store.mutate(path_id, fn)
+
+    def note_explained(self, path_id: str, kp_id: str, summary: str):
+        def fn(tx):
+            kp, _ = tx.progress.find_knowledge_point(kp_id)
+            tx.require(kp is not None, f"unknown objective: {kp_id}")
+            tx.progress.explained_objectives[kp_id] = {"summary": summary}
+            tx.emit("objective.explained", {"knowledge_point_id": kp_id, "summary": summary})
+            return {"knowledge_point_id": kp_id, "mastery_credit": False}
+
+        return self.store.mutate(path_id, fn)
+
+    def defer_objective(self, path_id: str, kp_id: str, note: str = ""):
+        def fn(tx):
+            kp, _ = tx.progress.find_knowledge_point(kp_id)
+            tx.require(kp is not None, f"unknown objective: {kp_id}")
+            tx.progress.deferred_objectives[kp_id] = DeferredObjective(
+                knowledge_point_id=kp_id, note=note
+            )
+            tx.emit("objective.deferred", {"knowledge_point_id": kp_id})
+            return {"knowledge_point_id": kp_id, "deferred": True}
 
         return self.store.mutate(path_id, fn)
 

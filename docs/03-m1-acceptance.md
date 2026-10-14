@@ -97,7 +97,7 @@
 | --- | --- | --- |
 | TC-E1 | Given 已有 open interaction（`awaiting_input`），When 注册新题，Then 被拒绝（单槽位） | INV-02 |
 | TC-E2 | Given 现有题进入 `graded`，When 注册新题，Then 成功 | INV-02 |
-| TC-E3 | Given 同一 `interaction_id` 重复提交判分，When 执行，Then 幂等（不重复记账）（**M2：判分实现后**） | — |
+| TC-E3 | Given 同一 `interaction_id` 重复提交判分，When 执行，Then 幂等（不重复记账）（M3 已实现） | INV-22/45 |
 | TC-E4 | Given `answer_pending` 的公共 status 投影，When 序列化，Then **不含** `expected_answer`/`explanation` | INV-07 |
 
 ## 三、不变量 → 测试追踪表

@@ -54,6 +54,8 @@ class AgentLoop:
         prompt = system_prompt or _system_prompt(ctx.session_mode)
         history: list[dict[str, Any]] = [{"role": "system", "content": prompt}, *messages]
         tool_names = sorted(self.tools)
+        ended = {"value": False}
+        ctx.end_turn = lambda: ended.__setitem__("value", True)
 
         for _ in range(self.max_rounds):
             response = client.chat(history, tool_names)
@@ -92,6 +94,11 @@ class AgentLoop:
                         "content": result.content,
                     }
                 )
+                if ended["value"]:
+                    # Posing a question ends the turn (INV-44): the learner's
+                    # answer arrives as the next message.
+                    events.append(StreamEvent("turn_end", {"reason": "card"}))
+                    return events
         events.append(StreamEvent("turn_end", {"reason": "max_rounds"}))
         return events
 

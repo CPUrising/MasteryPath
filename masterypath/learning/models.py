@@ -210,6 +210,10 @@ class PendingQuestion(BaseModel):
     explanation: str = ""
     difficulty: str = ""
     accepted_answers: list[str] = Field(default_factory=list)
+    # Open-question keywords are fixed at registration (INV-35) so grading is
+    # deterministic and never calls an LLM.
+    required_keywords: list[str] = Field(default_factory=list)
+    optional_keywords: list[str] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
 
     @property

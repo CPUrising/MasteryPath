@@ -47,11 +47,23 @@ class PreconditionError(RuntimeError):
 
 
 class Transaction:
-    """Passed to ``mutate`` callbacks: mutate ``progress``, ``emit`` events."""
+    """Passed to ``mutate`` callbacks: mutate ``progress``, ``emit`` events.
 
-    def __init__(self, progress: LearningProgress) -> None:
+    Interaction helpers run on the *same* connection/transaction, so a grade
+    that writes the attempt, the evidence and the interaction commits or rolls
+    back together (INV-51).
+    """
+
+    def __init__(
+        self,
+        progress: LearningProgress,
+        conn: sqlite3.Connection | None = None,
+        path_id: str = "",
+    ) -> None:
         self.progress = progress
         self.events: list[dict[str, Any]] = []
+        self._conn = conn
+        self.path_id = path_id
 
     def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         self.events.append({"event_type": event_type, "payload": payload or {}})
@@ -60,6 +72,50 @@ class Transaction:
         if not condition:
             raise PreconditionError(message)
 
+    # -- interactions (same transaction) ----------------------------------
+    def get_interaction(self, interaction_id: str) -> MasteryInteraction | None:
+        if self._conn is None:
+            return None
+        row = self._conn.execute(
+            "SELECT data FROM interactions WHERE path_id=? AND interaction_id=?",
+            (self.path_id, interaction_id),
+        ).fetchone()
+        return MasteryInteraction.model_validate_json(row["data"]) if row else None
+
+    def get_open_interaction(self) -> MasteryInteraction | None:
+        if self._conn is None:
+            return None
+        placeholders = ",".join("?" for _ in _ACTIVE_INTERACTION_STATES)
+        row = self._conn.execute(
+            f"SELECT data FROM interactions WHERE path_id=? AND status IN "
+            f"({placeholders}) ORDER BY created_at DESC LIMIT 1",
+            (self.path_id, *_ACTIVE_INTERACTION_STATES),
+        ).fetchone()
+        return MasteryInteraction.model_validate_json(row["data"]) if row else None
+
+    def save_interaction(self, interaction: MasteryInteraction) -> None:
+        if self._conn is None:
+            raise PreconditionError("no transaction connection")
+        interaction.updated_at = time.time()
+        self._conn.execute(
+            _UPSERT_INTERACTION,
+            (
+                interaction.interaction_id,
+                interaction.path_id,
+                interaction.status.value,
+                interaction.model_dump_json(),
+                interaction.created_at,
+                interaction.updated_at,
+            ),
+        )
+
+
+_UPSERT_INTERACTION = """
+INSERT INTO interactions(interaction_id, path_id, status, data, created_at, updated_at)
+VALUES(?,?,?,?,?,?)
+ON CONFLICT(interaction_id) DO UPDATE SET
+    status=excluded.status, data=excluded.data, updated_at=excluded.updated_at
+"""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paths (
@@ -211,7 +267,7 @@ class LearningStore:
                             f"found {old_version}"
                         )
                     progress = LearningProgress.model_validate_json(row["data"])
-                tx = Transaction(progress)
+                tx = Transaction(progress, self._conn, path_id)
                 result = fn(tx)
                 new_version = (old_version or 0) + 1
                 progress.version = new_version

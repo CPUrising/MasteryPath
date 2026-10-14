@@ -50,7 +50,20 @@ python -m venv .venv
 | — | Agent Loop + 模式调用期门控（`test_loop`） | ✅ |
 
 - 供应商为 `DeepSeekClient` **占位适配器**（`NotImplementedError`）；测试全程用 `FakeLLMClient`，离线运行（ADR-014）。
-- `TC-I3`（`question_card` 投影）随 M3 判分/卡片实现；`mastery_quiz/grade` 属 M3。
+- `TC-I3`（`question_card` 投影）由 `test_tc_e4` 覆盖（公共投影不含答案）。
+
+## M3 覆盖（study：出题 + 确定性判分 + 量化门槛）
+
+| 组 | 内容 | 状态 |
+| --- | --- | --- |
+| H | 判分规则（choice/short/open）`TC-H1..H5` | ✅ |
+| K | `mastery_quiz/grade` 契约 `TC-K1..K6` | ✅ |
+| E | 判分幂等 `TC-E3`（`already_graded`，不重复记证据） | ✅ |
+| — | 量化门槛：答对→`mastery_levels`≥0.9→`objective.mastered`→前沿推进 | ✅ |
+
+- 新增 `learning/grading.py`（确定性判分，无 LLM）、`learning/mastery.py`（近期加权掌握度）、`learning/question_card.py`（卡片，无答案）。
+- `mastery_quiz` 出题即**结束回合**（`end_turn`，`INV-44`）；`ungraded` **零状态变更**（`INV-46`）。
+- 未纳入 M3：`mastery_assess`（concept/design 定性，M4）；`review` 排期（M5）。
 
 ## 运行
 
