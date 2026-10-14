@@ -91,6 +91,18 @@ python -m venv .venv
 - 单调度器、按 provenance 播种（ADR-002）；算法 SM-2，FSRS 字段仅展示（`INV-31`）。
 - 未纳入 M5：`scenario` 场景预设（二期）；跨会话「同一天多练不清零」的会话判定属后续细化。
 
+## M6 覆盖（题库同步 + 标签）
+
+| 内容 | 状态 |
+| --- | --- |
+| 判分/定性评估自动入库（题面、选项、正确答案、解析、难度、作答、结果） | ✅ |
+| **知识点自动关联**（`knowledge_point_id` + 名称） | ✅ |
+| 标签手动（`tag_question`，去重）；按标签筛选 | ✅ |
+| REST：`GET /learning/paths/{id}/questions`、`POST /learning/questions/{id}/tags` | ✅ |
+
+- 新增 `QuestionBankEntry` + `question_bank` 表；入库在判分同一事务内完成（与证据一致）。
+- 标签为 MVP 手动；知识点关联**自动**（便于复习按点筛选）。
+
 ## 运行
 
 ```powershell

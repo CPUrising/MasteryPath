@@ -140,6 +140,18 @@ def create_app(
     def events(path_id: str, since: int = 0) -> list[dict]:
         return store.events_since(path_id, since)
 
+    # -- question bank (M6) ------------------------------------------------
+    @app.get("/learning/paths/{path_id}/questions")
+    def questions(path_id: str, tag: str | None = None) -> list[dict]:
+        return service.list_questions(path_id, tag=tag)
+
+    @app.post("/learning/questions/{entry_id}/tags")
+    def tag_question(entry_id: str, payload: dict[str, Any] = Body(...)) -> dict:
+        try:
+            return service.tag_question(entry_id, payload.get("tags") or [])
+        except PreconditionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
     # -- sessions / mode ---------------------------------------------------
     @app.put("/learning/paths/{path_id}/sessions/{session_id}/mode")
     def set_mode(path_id: str, session_id: str, payload: dict[str, Any] = Body(...)) -> dict:

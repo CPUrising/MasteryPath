@@ -27,6 +27,7 @@ from masterypath.learning.models import (
     InteractionStatus,
     LearningProgress,
     MasteryInteraction,
+    QuestionBankEntry,
 )
 
 _T = TypeVar("_T")
@@ -109,12 +110,34 @@ class Transaction:
             ),
         )
 
+    def save_bank_entry(self, entry: QuestionBankEntry) -> None:
+        if self._conn is None:
+            raise PreconditionError("no transaction connection")
+        entry.updated_at = time.time()
+        self._conn.execute(
+            _UPSERT_BANK,
+            (
+                entry.entry_id,
+                entry.path_id,
+                entry.model_dump_json(),
+                entry.created_at,
+                entry.updated_at,
+            ),
+        )
+
 
 _UPSERT_INTERACTION = """
 INSERT INTO interactions(interaction_id, path_id, status, data, created_at, updated_at)
 VALUES(?,?,?,?,?,?)
 ON CONFLICT(interaction_id) DO UPDATE SET
     status=excluded.status, data=excluded.data, updated_at=excluded.updated_at
+"""
+
+_UPSERT_BANK = """
+INSERT INTO question_bank(entry_id, path_id, data, created_at, updated_at)
+VALUES(?,?,?,?,?)
+ON CONFLICT(entry_id) DO UPDATE SET
+    data=excluded.data, updated_at=excluded.updated_at
 """
 
 _SCHEMA = """
@@ -144,6 +167,14 @@ CREATE TABLE IF NOT EXISTS interactions (
     updated_at     REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_interactions_path_status ON interactions(path_id, status);
+CREATE TABLE IF NOT EXISTS question_bank (
+    entry_id   TEXT PRIMARY KEY,
+    path_id    TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bank_path ON question_bank(path_id);
 """
 
 
@@ -371,6 +402,43 @@ class LearningStore:
         if row is None:
             return None
         return MasteryInteraction.model_validate_json(row["data"])
+
+    # -- question bank -----------------------------------------------------
+    def save_bank_entry(self, entry: QuestionBankEntry) -> QuestionBankEntry:
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                entry.updated_at = time.time()
+                self._conn.execute(
+                    _UPSERT_BANK,
+                    (
+                        entry.entry_id,
+                        entry.path_id,
+                        entry.model_dump_json(),
+                        entry.created_at,
+                        entry.updated_at,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return entry
+
+    def get_bank_entry(self, entry_id: str) -> QuestionBankEntry | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT data FROM question_bank WHERE entry_id=?", (entry_id,)
+            ).fetchone()
+        return QuestionBankEntry.model_validate_json(row["data"]) if row else None
+
+    def list_bank_entries(self, path_id: str) -> list[QuestionBankEntry]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT data FROM question_bank WHERE path_id=? ORDER BY created_at DESC",
+                (path_id,),
+            ).fetchall()
+        return [QuestionBankEntry.model_validate_json(row["data"]) for row in rows]
 
     def close(self) -> None:
         with self._lock:

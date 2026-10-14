@@ -22,6 +22,7 @@ from masterypath.learning.models import (
     LearningProgress,
     MasteryInteraction,
     QuizAttempt,
+    QuestionBankEntry,
 )
 from masterypath.learning.outline import (
     BuildResult,
@@ -289,6 +290,25 @@ class LearningService:
             current.user_answer = answer
             current.result = payload
             tx.save_interaction(current)
+            tx.save_bank_entry(
+                QuestionBankEntry(
+                    entry_id=uuid.uuid4().hex,
+                    path_id=path_id,
+                    knowledge_point_id=kp.id,
+                    knowledge_point_name=kp.name,
+                    question_id=pending.question_id,
+                    question=pending.prompt,
+                    question_type=pending.question_type,
+                    options=[option.model_dump() for option in pending.options],
+                    correct_answer=pending.expected_answer,
+                    explanation=pending.explanation,
+                    difficulty=pending.difficulty,
+                    user_answer=answer,
+                    is_correct=is_correct,
+                    result=result,
+                    source="mastery_path",
+                )
+            )
             tx.emit(
                 "attempt.graded",
                 {
@@ -378,6 +398,20 @@ class LearningService:
                     "objective.mastered",
                     {"knowledge_point_id": kp_id, "source": source},
                 )
+            tx.save_bank_entry(
+                QuestionBankEntry(
+                    entry_id=uuid.uuid4().hex,
+                    path_id=path_id,
+                    knowledge_point_id=kp_id,
+                    knowledge_point_name=kp.name,
+                    question=kp.name,
+                    question_type="written",
+                    user_answer=evidence,
+                    is_correct=bool(passed),
+                    result="correct" if passed else "partial",
+                    source="mastery_path",
+                )
+            )
             return payload
 
         return self.store.mutate(path_id, fn)
@@ -417,6 +451,21 @@ class LearningService:
             return {"knowledge_point_id": kp_id, "deferred": True}
 
         return self.store.mutate(path_id, fn)
+
+
+    # -- question bank (M6) ------------------------------------------------
+    def list_questions(self, path_id: str, *, tag: str | None = None) -> list[dict[str, Any]]:
+        entries = self.store.list_bank_entries(path_id)
+        if tag:
+            entries = [entry for entry in entries if tag in entry.tags]
+        return [entry.model_dump() for entry in entries]
+
+    def tag_question(self, entry_id: str, tags: list[str]) -> dict[str, Any]:
+        entry = self.store.get_bank_entry(entry_id)
+        if entry is None:
+            raise PreconditionError(f"unknown question bank entry: {entry_id}")
+        entry.tags = list(dict.fromkeys(str(tag) for tag in tags))
+        return self.store.save_bank_entry(entry).model_dump()
 
 
 def _schedule_after(

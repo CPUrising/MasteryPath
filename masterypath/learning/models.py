@@ -308,6 +308,34 @@ class MasteryEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class QuestionBankEntry(BaseModel):
+    """One graded attempt stored for later review (spec 06/05).
+
+    The knowledge-point link is automatic; ``tags`` are manual (MVP).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    entry_id: str
+    path_id: str
+    knowledge_point_id: str
+    knowledge_point_name: str = ""
+    question_id: str = ""
+    question: str = ""
+    question_type: str = "short"
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    correct_answer: str = ""
+    explanation: str = ""
+    difficulty: str = ""
+    user_answer: str = ""
+    is_correct: bool = False
+    result: str = "incorrect"
+    source: str = "mastery_path"
+    tags: list[str] = Field(default_factory=list)
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
 class TopicMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -389,6 +417,7 @@ __all__ = [
     "SourceGap",
     "MasteryInteraction",
     "MasteryEvent",
+    "QuestionBankEntry",
     "TopicMetadata",
     "TopicSource",
     "LearningProgress",
