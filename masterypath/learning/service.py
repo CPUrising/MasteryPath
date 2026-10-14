@@ -294,6 +294,71 @@ class LearningService:
 
         return self.store.mutate(path_id, fn)
 
+    def assess(
+        self,
+        path_id: str,
+        kp_id: str,
+        *,
+        passed: bool,
+        evidence: str = "",
+        quality: float | None = None,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> dict[str, Any]:
+        """Feynman-style qualitative gate for CONCEPT / DESIGN (ADR-007 / INV-05).
+
+        Refuses quantitative objectives: those are opened by ``grade``.
+        """
+
+        def fn(tx):
+            kp, _ = tx.progress.find_knowledge_point(kp_id)
+            tx.require(kp is not None, f"unknown objective: {kp_id}")
+            assert kp is not None
+            tx.require(
+                kp.type in policy.QUALITATIVE_TYPES,
+                "mastery_assess is for concept/design objectives; use mastery_grade "
+                "for memory/procedure",
+            )
+            was_mastered = policy.is_mastered(tx.progress, kp)
+            tx.progress.qualitative_mastery[kp_id] = bool(passed)
+            tx.progress.learning_evidence.append(
+                LearningEvidence(
+                    evidence_id=uuid.uuid4().hex,
+                    knowledge_point_id=kp_id,
+                    assessment_type=AssessmentType.QUALITATIVE,
+                    result=AssessmentResult.CORRECT if passed else AssessmentResult.PARTIAL,
+                    quality=1.0 if passed else (0.2 if quality is None else quality),
+                    hints_used=0,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    source="mastery_path",
+                )
+            )
+            gate_cleared = policy.is_mastered(tx.progress, kp) and not was_mastered
+            if tx.progress.pending_question and (
+                tx.progress.pending_question.knowledge_point_id == kp_id
+            ):
+                tx.progress.pending_question = None
+            payload = {
+                "status": "assessed",
+                "knowledge_point_id": kp_id,
+                "passed": bool(passed),
+                "gate_cleared": gate_cleared,
+                "source": policy.mastery_source(tx.progress, kp),
+            }
+            tx.emit(
+                "qualitative.assessed",
+                {"knowledge_point_id": kp_id, "passed": bool(passed), "quality": quality},
+            )
+            if gate_cleared:
+                tx.emit(
+                    "objective.mastered",
+                    {"knowledge_point_id": kp_id, "source": payload["source"]},
+                )
+            return payload
+
+        return self.store.mutate(path_id, fn)
+
     def skip_question(self, path_id: str, question_id: str, *, session_id: str = "", turn_id: str = ""):
         def fn(tx):
             current = tx.get_interaction(question_id)

@@ -65,6 +65,17 @@ python -m venv .venv
 - `mastery_quiz` 出题即**结束回合**（`end_turn`，`INV-44`）；`ungraded` **零状态变更**（`INV-46`）。
 - 未纳入 M3：`mastery_assess`（concept/design 定性，M4）；`review` 排期（M5）。
 
+## M4 覆盖（concept/design 定性评估）
+
+| 内容 | 状态 |
+| --- | --- |
+| `mastery_assess` 定性通过/不通过（费曼式，写 `qualitative_mastery`） | ✅ |
+| 仅限 concept/design：对 memory/procedure 调 `assess` → 拒绝 | ✅ |
+| review 模式禁评未掌握目标 | ✅ |
+| 证据 `assessment_type=qualitative`；多次评估证据累积；通过→门槛清除→前瞻推进 | ✅ |
+
+- `mastery_assess` 是 concept/design 的开门方式；选择题判分**不会**打开它们（`INV-05`）。
+
 ## 运行
 
 ```powershell

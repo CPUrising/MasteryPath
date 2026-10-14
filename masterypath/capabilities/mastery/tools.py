@@ -368,12 +368,59 @@ class MasteryDeferObjectiveTool:
         return ToolResult(ok=True, content="Objective deferred.", metadata=result)
 
 
-# Tools mounted on every mastery turn (M2 + M3 set).
+class MasteryAssessTool:
+    name = "mastery_assess"
+    description = (
+        "Judge a CONCEPT or DESIGN objective qualitatively from the learner's own "
+        "explanation (Feynman-style). This is how those types are opened; a "
+        "multiple-choice answer never opens them."
+    )
+
+    def execute(self, params: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        refusal = _wrong_mode_result(self.name, ctx)
+        if refusal is not None:
+            return refusal
+        progress = ctx.service.store.load(ctx.path_id)
+        if progress is None:
+            return ToolResult(ok=False, content="no mastery path is active")
+        kp_id = str(params.get("knowledge_point_id") or "")
+        kp, _, _ = policy.find_knowledge_point(progress, kp_id)
+        if kp is None:
+            return ToolResult(ok=False, content=f"unknown objective: {kp_id}")
+        if mode.enforced_mode(ctx.session_mode) == mode.REVIEW and not policy.is_mastered(
+            progress, kp
+        ):
+            return ToolResult(
+                ok=False,
+                content=f"{kp.name!r} is not mastered yet; review re-tests proven objectives.",
+            )
+        passed = bool(params.get("passed"))
+        try:
+            result = ctx.service.assess(
+                ctx.path_id,
+                kp_id,
+                passed=passed,
+                evidence=str(params.get("evidence") or ""),
+                quality=params.get("quality"),
+                session_id=ctx.session_id,
+                turn_id=ctx.turn_id,
+            )
+        except PreconditionError as exc:
+            return ToolResult(ok=False, content=str(exc))
+        return ToolResult(
+            ok=True,
+            content=f"Assessment recorded: {'passed' if passed else 'not yet'}.",
+            metadata=result,
+        )
+
+
+# Tools mounted on every mastery turn (M2 + M3 + M4 set).
 TOOLS = {
     MasteryBuildTool.name: MasteryBuildTool(),
     MasteryReviseTool.name: MasteryReviseTool(),
     MasteryQuizTool.name: MasteryQuizTool(),
     MasteryGradeTool.name: MasteryGradeTool(),
+    MasteryAssessTool.name: MasteryAssessTool(),
     MasterySkipQuestionTool.name: MasterySkipQuestionTool(),
     MasteryNoteExplainedTool.name: MasteryNoteExplainedTool(),
     MasteryDeferObjectiveTool.name: MasteryDeferObjectiveTool(),
@@ -382,6 +429,7 @@ TOOLS = {
 
 __all__ = [
     "TOOLS",
+    "MasteryAssessTool",
     "MasteryBuildTool",
     "MasteryDeferObjectiveTool",
     "MasteryGradeTool",
