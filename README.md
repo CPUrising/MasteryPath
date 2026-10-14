@@ -1,7 +1,9 @@
 # MasteryPath
 
-以知识地图为中心的掌握式学习智能体。本仓库当前处于 **M1**：
-领域模型 + SQLite(CAS) 存储 + 掌握门槛策略 + 模式门控，全部为**无 LLM 的纯逻辑**。
+以知识地图为中心的掌握式学习智能体。里程碑 **M1–M8 已完成**（M7 前端未验收）：
+领域模型 + SQLite(CAS) 存储 + 掌握门槛 + 模式门控 + 大纲 + 出题判分 + 定性评估 + SM-2 复习 + 题库 + 文件夹知识库 + Task Model。
+
+> **使用说明见 [`USAGE.md`](./USAGE.md)**。
 
 ## 规格
 
@@ -13,9 +15,15 @@ ADR 定决策、INV 定约束、TC 定对错。实现只以规格为准。
 ```
 docs/                        规格包（README + 00–07）
 masterypath/
-  learning/                  models / policy / storage / pending
-  capabilities/mastery/      mode（工具权限 + 守卫）
+  learning/                  models / policy / storage / pending / outline /
+                             grading / mastery / question_card / scheduler / service
+  capabilities/mastery/      mode（工具权限 + 守卫）/ tools
+  agents/                    llm / loop / task_model
+  knowledge/                 loader（文件夹知识库）
+  api/                       app（REST + WS）
 tests/                       验收测试（对应 docs 的 TC-*）
+web/                         M7 前端脚手架（Next.js，暂未验收）
+USAGE.md                     使用手册
 pyproject.toml
 ```
 
