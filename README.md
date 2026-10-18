@@ -1,9 +1,9 @@
 # MasteryPath
 
-以知识地图为中心的掌握式学习智能体。里程碑 **M1–M8 已完成**（M7 前端未验收）：
+以知识地图为中心的掌握式学习智能体。里程碑 **M1–M8 已完成**（M7 前端待本机验收）：
 领域模型 + SQLite(CAS) 存储 + 掌握门槛 + 模式门控 + 大纲 + 出题判分 + 定性评估 + SM-2 复习 + 题库 + 文件夹知识库 + Task Model。
 
-> **使用说明见 [`USAGE.md`](./USAGE.md)**。
+> **使用说明见 [`USAGE.md`](./USAGE.md)**。（需求规格说明书 `SRS.md` 为课程提交件，已在 `.gitignore` 中忽略。）
 
 ## 规格
 
@@ -20,9 +20,10 @@ masterypath/
   capabilities/mastery/      mode（工具权限 + 守卫）/ tools
   agents/                    llm / loop / task_model
   knowledge/                 loader（文件夹知识库）
+  settings/                  store（提供方/模型/嵌入/常规配置）
   api/                       app（REST + WS）
 tests/                       验收测试（对应 docs 的 TC-*）
-web/                         M7 前端脚手架（Next.js，暂未验收）
+web/                         M7 前端（Next.js，对齐 DeepTutor；待本机验收）
 USAGE.md                     使用手册
 pyproject.toml
 ```
@@ -111,12 +112,13 @@ python -m venv .venv
 - 新增 `QuestionBankEntry` + `question_bank` 表；入库在判分同一事务内完成（与证据一致）。
 - 标签为 MVP 手动；知识点关联**自动**（便于复习按点筛选）。
 
-## M7 覆盖（三模式工作区 UI，对齐 DeepTutor，暂未验收）
+## M7 覆盖（三模式工作区 UI + 设置中心，对齐 DeepTutor，待本机验收）
 
 - `web/`：Next.js（App Router）+ React + TS + Tailwind + react-i18next；**页面构成对齐 DeepTutor**：`AppShell` + 侧栏、mastery 三页（图集/仪表盘/学习工作区）、设置中心（Providers/Language models/Task models/Embedding/General）。
+- **设置中心**：独立外壳（左上「返回主页面」）+ 分组导航；**Providers 与 Models（llm/task/embedding）为主从布局**（左侧列表 + 「添加」面板 + 右侧编辑器）；模型按「列表 + 默认」存储（`{models, active_id}`）。
 - 设计令牌（CSS 变量）+ 掌握动画（形态语言）+ 中英双语。
-- 为支撑该 UI 已补齐后端（F0）：`/settings/*`、sessions/messages、仪表盘字段、rename/redo/delete、REST 出题判分。
-- **本环境无 Node，未运行 `npm install` / `next build`**，故暂不验收（见 `web/README.md`）。
+- 为支撑该 UI 已补齐后端（F0）：`/settings/*`、sessions/messages、仪表盘字段、rename/redo/delete、**REST 出题/判分（无模型也能用）**。
+- `npm install` 已在 `web/` 执行（含 `package-lock.json`）；`npm run dev` / `next build` 需在本机 Node 环境验收（见 `web/README.md`）。
 
 ## M8 覆盖（Task Model 建议下一问）
 
