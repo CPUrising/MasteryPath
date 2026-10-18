@@ -25,8 +25,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -c "import uvicorn; from masterypath.api.app import create_app; from masterypath.learning.storage import LearningStore; uvicorn.run(create_app(LearningStore('data')), host='127.0.0.1', port=8001)"
 ```
 
-- 默认端口 **8001**；数据落在 `data/learning.db`（workspace 级 SQLite）。
+- 默认端口 **8001**；数据落在 `data/learning.db`（workspace 级 SQLite），配置落在 `data/settings.json`。
 - 真实模型：需自行实现 `masterypath/agents/llm.py::DeepSeekClient`（原生 function calling + 流式）。**当前它是占位适配器**，未接入时任何对话回合会抛 `NotImplementedError`。测试全部用 `FakeLLMClient`，离线运行。
+- 无模型也能用：出题/判分/评估走 REST（`/learning/paths/{id}/quiz|grade|assess|skip-question`），不依赖 WS/模型。
 
 ---
 
@@ -225,11 +226,21 @@ store.close()
 ```bash
 cd web
 npm install
-npm run dev     # http://localhost:3000/?path=<pathId>
+npm run dev
 ```
 
+入口：
+
+| 页面 | URL |
+| --- | --- |
+| 掌握之路图集 | `http://localhost:3000/learning/mastery` |
+| 目标仪表盘 | `/learning/mastery/<pathId>` |
+| 学习工作区 | `/learning/mastery/<pathId>/sessions` |
+| 设置中心 | `/settings/connections`（提供方）、`/settings/llm`、`/settings/task-models`、`/settings/embedding`、`/settings/general` |
+
 - 后端地址：`NEXT_PUBLIC_API_BASE`（默认 `http://127.0.0.1:8001`）。
-- 工作区：当前主题 / 路标 / 进度环 / 大纲树 / 对话 / 三模式按钮 / 输入框（Tab 采纳建议）/ Activity 抽屉 / 侧边查看器。
+- 页面构成对齐 DeepTutor：`AppShell` + 侧栏；mastery 三页；设置中心为**独立外壳**（左上「返回主页面」）+ 分组导航，提供方/模型页为**主从**（左侧列表 + 「添加」面板 + 右侧编辑器）。
+- 对话回合需要已配置的模型提供方；未配置时输入框旁给出提示。**出题/判分走 REST，不依赖模型**。
 
 ---
 
