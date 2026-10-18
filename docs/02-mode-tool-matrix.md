@@ -38,6 +38,8 @@
 | `mastery_repair_question` | study+review | ❌ | ✅ | ✅ | 作废错误评估并重算 |
 | `mastery_defer_objective` | study+review | ❌ | ✅ | ✅ | 暂时跳过某 KP |
 | `mastery_note_explained` | study+review | ❌ | ✅ | ✅ | 记录"已讲解"（不授予掌握） |
+| `mastery_propose_objective` | study+review | ❌ | ✅ | ✅ | **提议候选 KP**（不改地图，ADR-017 / `INV-53/54`） |
+| `mastery_note_gap` | study+review | ❌ | ✅ | ✅ | **记缺口**（学习中发现的覆盖缺失，不改地图） |
 | `mastery_status` | 共享 | ✅ | ✅ | ✅ | 读状态/刷新快照 |
 | `mastery_mode` | 共享 | ✅ | ✅ | ✅ | 切换模式（返回新模式的提示词块） |
 | `mastery_profile` | 共享 | ✅ | ✅ | ✅ | 记录学习者画像（intake） |
@@ -82,6 +84,14 @@ review 模式下，若目标 KP 未掌握：
 - 出题注册成功 → 触发 `end_turn`；其后的任何工具调用都不会执行。
 - 题目已存在（单槽位）→ **重放**同一张卡，忽略新参数，并明确告知未产生新题。
 
+### R6 · 捕获-延后不改结构（ADR-017 / `INV-53`）
+- `mastery_propose_objective` / `mastery_note_gap` 在 study/review 下**只写候选/备注**（`proposals` / `source_gaps`），**不得**增删改模块/KP。
+- 结构改动只能经 outline 的 `mastery_build` / `mastery_revise`；accept 一个 proposal = 在 outline 下调用 `mastery_revise`。
+
+### R7 · 行为预算（ADR-019 / `INV-60`）
+- 单回合工具调用数、连续追问次数、同一题提示次数均设上限（默认见 `00` §四 #11，⚠️ 暂定）。
+- 超限 → 引擎拒绝并给可操作提示（如"先让学习者作答，再继续"）。
+
 ## 五、完整性守卫（ADR-005 / INV-17）
 
 ### 归属来源：代码拥有的静态表
@@ -92,7 +102,8 @@ SHARED_TOOLS   = {mastery_status, mastery_mode, mastery_profile,
 OUTLINE_ONLY   = {mastery_build, mastery_revise}
 STUDY_REVIEW   = {mastery_quiz, mastery_grade, mastery_assess,
                   mastery_skip_question, mastery_repair_question,
-                  mastery_defer_objective, mastery_note_explained}
+                  mastery_defer_objective, mastery_note_explained,
+                  mastery_propose_objective, mastery_note_gap}
 
 TOOL_MODES = {t: {OUTLINE}        for t in OUTLINE_ONLY} \
            | {t: {STUDY, REVIEW}  for t in STUDY_REVIEW}

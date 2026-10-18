@@ -53,6 +53,8 @@
 | `deferred_objectives` | dict[kp,DeferredObjective] | |
 | `explained_objectives` | dict[kp,dict] | |
 | `source_gaps` | list[SourceGap] | 缺口记录（`INV-23`） |
+| `proposals` | list[ObjectiveProposal] | 学习中提议的候选 KP（`INV-53/54`） |
+| `coverage` | CoverageReport\|None | 最近一次 build 的覆盖报告（`INV-56`） |
 | `pending_question` | PendingQuestion\|None | **单槽位**（`INV-02`） |
 | `desired_retention` | float | 默认 `0.9`，区间 `[0.7,0.99]` |
 | `version` | int | CAS 版本 |
@@ -106,6 +108,33 @@
 | `resolution` | `""`\|`accepted`\|`regenerated` | 处理结果 |
 | `created_at` | float | |
 
+### ObjectiveProposal（学习中提议的候选 KP · ADR-017）
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | str | |
+| `path_id` | str | |
+| `name` | str | 候选目标名（≥2 字） |
+| `type` | KnowledgeType | 候选类型 |
+| `reason` | str | 为什么需要它（学习中发现） |
+| `source_ids` | list[str] | 支撑来源（可空 ⇒ 未接地） |
+| `module_id` | str | 拟归属模块（可空） |
+| `status` | `pending`\|`accepted`\|`rejected` | 仅在 outline reconcile 时流转 |
+| `proposed_by` | `learner`\|`tutor` | |
+| `session_id` / `turn_id` | str | 审计 |
+| `created_at` | float | |
+
+> 候选**不是 KP**：不影响 `map`/`next_objective`/门槛，直到 outline 时 accept（走 `mastery_revise` 成为 KP）。
+
+### CoverageReport（生成质量覆盖报告 · ADR-018）
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `documents` | int | 选中来源总数 |
+| `covered` | int | 被至少一个模块/KP 用上的来源数 |
+| `missing` | list[{label, document}] | 未被覆盖的来源 |
+| `reported` | bool | 模型是否声明了 materials；`false` ⇒ 不作结论 |
+| `grounding_ratio` | float | 有可解析来源的 KP / 总 KP |
+| `acyclic` | bool | 前置图无环 |
+
 ### TopicMetadata / TopicSource
 - `TopicMetadata`：`path_id` · `goal` · `description` · `emoji` · `status`(active\|archived) · `created_at` · `updated_at`
 - `TopicSource`：`id` · `kind`(`goal|book|notebook|knowledge_base|file`) · `source_id` · `label` · `excerpt` · `position` · `available`
@@ -155,7 +184,7 @@ next_objective(progress):
     全掌握/已 defer 时：有待答题→"answer_pending"；有到期→"review"；否则→"complete"
 ```
 
-## 五、不变量清单（INV-01…52）
+## 五、不变量清单（INV-01…60）
 
 > 每条至少被一个测试覆盖（追踪表见各文档）。
 
@@ -214,6 +243,14 @@ next_objective(progress):
 | INV-50 | **逻辑并发由 CAS 保证**，跨线程/进程一致；物理串行仅为性能 |
 | INV-51 | **状态与事件同事务**提交或同滚 |
 | INV-52 | **workspace 隔离 = 独立 DB 文件**，跨 workspace 无共享锁 |
+| INV-53 | **捕获不改结构**：study/review 下只可新增 `ObjectiveProposal`/`SourceGap`/备注，**不得**增删改模块/KP（结构改动仅 outline） |
+| INV-54 | **候选非 KP**：proposal 不影响 `map`/`next_objective`/门槛；仅 outline accept 时经 `mastery_revise` 成为 KP |
+| INV-55 | **地图为可版本化草案**：build/revise 递增 `version`；近似性由 `CoverageReport` 暴露，不假装完备 |
+| INV-56 | **build 必须返回覆盖报告**（covered/total/missing/reported） |
+| INV-57 | **质量以确定性指标为准**：coverage/grounding/acyclic/count-in-bounds；语义指标用嵌入匹配（`09`） |
+| INV-58 | **来源纪律**：不得为未接地（`ungrounded`）KP 声称来源支撑 |
+| INV-59 | **行为越界由引擎拒绝**：意图白/黑名单与前置校验在调用期生效（不靠提示词） |
+| INV-60 | **行为预算**：单回合工具调用、连续追问、同题提示均设上限，超限拒绝（`08`） |
 
 ## 六、INV-25 已确认
 

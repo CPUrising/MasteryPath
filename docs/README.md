@@ -14,9 +14,10 @@
 | 角色 | 建议顺序 |
 | --- | --- |
 | **新实现者** | 本 README → `00-index`（ADR + 约束）→ `01`（模型/不变量）→ 按里程碑读 `03/04/05/06` |
-| **产品/评审** | `00-index` → `07-open-decisions`（签字记录）→ 各文档的"不动点" |
+| **产品/评审** | `00-index` → `07-open-decisions`（签字记录）→ `08-tutor-behavior`（行为契约）→ 各文档的"不动点" |
 | **只做 M1** | `01` → `03-m1-acceptance`（DoD 全绿即可交付） |
-| **接 Agent Loop** | `05-api-contract` → `06-tools-contract` |
+| **接 Agent Loop** | `05-api-contract` → `06-tools-contract` → `08-tutor-behavior` |
+| **做大纲质量** | `09-outline-eval`（指标/回归）→ `06-tools-contract`（coverage 返回） |
 
 ## 三、目录
 
@@ -24,13 +25,15 @@
 | --- | --- |
 | `README.md` | 本文件：规范、约定、协作方式 |
 | `00-index.md` | 索引、ADR、UI/供应商约束、已回签默认值、DoR/DoD |
-| `01-domain-model.md` | 实体/字段、关系图、**不变量 INV-01…52** |
-| `02-mode-tool-matrix.md` | 三模式工具权限矩阵、门控、模式切换审计 |
+| `01-domain-model.md` | 实体/字段、关系图、**不变量 INV-01…60** |
+| `02-mode-tool-matrix.md` | 三模式工具权限矩阵、门控、模式切换审计、预算 |
 | `03-m1-acceptance.md` | M1 验收测试、不变量追踪、DoD |
 | `04-scheduling.md` | SM-2 实现、播种、`scheduled_after_failure`、场景预设 |
 | `05-api-contract.md` | REST/WS 端点、事件、错误码、运行时边界 |
-| `06-tools-contract.md` | `build/revise/quiz/grade` 契约、判分规则、缺口处理 |
+| `06-tools-contract.md` | `build/revise/quiz/grade` 契约、判分规则、缺口处理、捕获工具 |
 | `07-open-decisions.md` | 决策清单（已回签，作为签字基线） |
+| `08-tutor-behavior.md` | 导师行为契约：意图白/黑名单、前置、预算、提示策略、来源纪律 |
+| `09-outline-eval.md` | 大纲生成质量评测：覆盖报告、golden set、指标、回归 |
 
 ## 四、约定（命名与编号）
 

@@ -32,9 +32,10 @@ KP     = { id, name, type, module_id, prerequisite_ids:[kp_id], source_ids:[sour
 **返回**
 ```
 { status: "built" | "refused_rebuild",
-  path_revision, map:{...}, gaps:[SourceGap], next:{...} }
+  path_revision, map:{...}, gaps:[SourceGap], coverage:CoverageReport, next:{...} }
 ```
 - 非空路径且无 `confirm` → `refused_rebuild`，列出**将丢失的内容**，地图不变（`INV-41`）。
+- **必须返回 `coverage`**（`INV-56`）：`{documents, covered, missing:[{label,document}], reported, grounding_ratio, acyclic}`；`reported=false` 时不下结论（`09`）。
 
 ---
 
@@ -177,7 +178,45 @@ KP     = { id, name, type, module_id, prerequisite_ids:[kp_id], source_ids:[sour
 
 ---
 
+## 七之二、捕获工具（ADR-017 · study/review）
+
+**用途**：学习中发现的缺口/新目标**只记录、不改地图**（`INV-53`）。
+
+### `mastery_propose_objective`
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `name` | ✔ | 候选目标名（≥2 字） |
+| `type` | ✔ | `memory\|procedure\|concept\|design` |
+| `reason` | | 为什么需要它 |
+| `module_id` / `sources` | | 拟归属模块 / 支撑来源（可空 ⇒ 未接地） |
+
+- 写入 `proposals`（`status=pending`），发 `objective.proposed`；**不影响** `map`/`next_objective`/门槛。
+- 返回：`{ proposal_id, status: "pending" }`。
+
+### `mastery_note_gap`
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `kind` | ✔ | `goal_gap\|source_omission` |
+| `ref` | | kp_id 或 source_id |
+| `reason` | | |
+
+- 追加 `SourceGap`，发 `gap.noted`；不改地图结构。
+
+### reconcile（在 outline）
+- `POST …/proposals/{id}/resolve {action}`：`accept` → 调用 `mastery_revise` 把候选变 KP；`reject` → 丢弃；发 `objective.proposal_resolved`（`INV-54`）。
+
+---
+
 ## 八、测试
+
+**捕获 / 覆盖（`TC-M*`）**
+| ID | 用例 | 覆盖 |
+| --- | --- | --- |
+| TC-M1 | study 下 `propose_objective` → 写入 `proposals`，`map`/`next_objective` 不变 | INV-53/54 |
+| TC-M2 | study 下尝试直接改结构（`mastery_revise`）→ 被拒 | INV-53 |
+| TC-M3 | outline 下 accept proposal → 该 KP 出现且可评估 | INV-54 |
+| TC-M4 | `build` 返回 `coverage`，`reported=false` 时 `missing` 不展开 | INV-56 |
+| TC-M5 | 覆盖比 < 门槛（`00` §四 #10）→ `eval` 报告不达标 | INV-57 |
 
 **缺口（`TC-F2…F5`）**
 | ID | 用例 | 覆盖 |

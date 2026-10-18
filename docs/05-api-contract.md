@@ -45,6 +45,14 @@
 | GET/PUT | `/learning/paths/{path_id}/profile` | 学习者画像（intake） |
 | GET | `/learning/paths/{path_id}/events?since={rev}` | 恢复用事件流 |
 
+**捕获 / 覆盖 / 评测（ADR-017/018）**
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/learning/paths/{path_id}/proposals` | 学习中提议的候选 KP |
+| POST | `/learning/paths/{path_id}/proposals/{proposal_id}/resolve` | `{action:"accept"\|"reject"}`（accept 走 revise） |
+| GET | `/learning/paths/{path_id}/coverage` | 最近一次 build 的 `CoverageReport` |
+| POST | `/learning/paths/{path_id}/eval` | 对当前地图跑确定性质量指标（`09`） |
+
 ## 三、WS 回合契约
 
 ```
@@ -83,6 +91,10 @@ WS /ws
 | `mastery.override` | 声明掌握 | kp_id, note | 进度（**不产 evidence**，`INV-15`） |
 | `review.scheduled` | 排期/重排 | kp_id, next_review_at, interval_index, provenance | 复习队列 |
 | `mode.changed` | 模式切换（**session 级**） | from, to, **actor** | 徽章/恢复/审计 |
+| `objective.proposed` | `mastery_propose_objective` | proposal_id, name, type | 地图（候选角标） |
+| `objective.proposal_resolved` | proposal accept/reject | proposal_id, action | 地图 |
+| `gap.noted` | `mastery_note_gap` | gap_id, kind, ref | 地图角标 |
+| `coverage.reported` | build 完成 | covered, total, reported | 地图（质量提示） |
 
 > 地图编辑**整组发一条 `outline.revised`**，不要每 KP 一条（事件爆炸）。
 
