@@ -111,10 +111,12 @@ python -m venv .venv
 - 新增 `QuestionBankEntry` + `question_bank` 表；入库在判分同一事务内完成（与证据一致）。
 - 标签为 MVP 手动；知识点关联**自动**（便于复习按点筛选）。
 
-## M7 覆盖（三模式工作区 UI，暂未验收）
+## M7 覆盖（三模式工作区 UI，对齐 DeepTutor，暂未验收）
 
-- `web/`：Next.js（App Router）+ React + TypeScript 脚手架（`Workspace` / `ModeBar` / `ProgressRing` / `OutlineTree` / `Transcript` / `Composer` / `ActivityDrawer` / `SideViewer`）。
-- 后端契约已就绪（`docs/05`）；**本环境无 Node，未运行构建/浏览器测试**，故暂不验收（见 `web/README.md`）。
+- `web/`：Next.js（App Router）+ React + TS + Tailwind + react-i18next；**页面构成对齐 DeepTutor**：`AppShell` + 侧栏、mastery 三页（图集/仪表盘/学习工作区）、设置中心（Providers/Language models/Task models/Embedding/General）。
+- 设计令牌（CSS 变量）+ 掌握动画（形态语言）+ 中英双语。
+- 为支撑该 UI 已补齐后端（F0）：`/settings/*`、sessions/messages、仪表盘字段、rename/redo/delete、REST 出题判分。
+- **本环境无 Node，未运行 `npm install` / `next build`**，故暂不验收（见 `web/README.md`）。
 
 ## M8 覆盖（Task Model 建议下一问）
 

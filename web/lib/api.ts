@@ -1,64 +1,106 @@
-import type { Mode, PathState } from "./types";
+import type { Mode, PathState, Provider, TopicSession } from "./types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001";
 export const WS_BASE = API_BASE.replace(/^http/, "ws");
 
-async function asJson<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    throw new Error(`${response.status}: ${await response.text()}`);
-  }
+async function json<T>(response: Response): Promise<T> {
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   return (await response.json()) as T;
 }
 
+const post = <T>(url: string, body: unknown) =>
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  }).then(json<T>);
+
+const put = <T>(url: string, body: unknown) =>
+  fetch(url, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  }).then(json<T>);
+
 export const api = {
   listPaths: () =>
-    fetch(`${API_BASE}/learning/paths`).then(asJson<{ path_id: string; name: string }[]>),
-
+    fetch(`${API_BASE}/learning/paths`).then(
+      json<{ path_id: string; name: string; goal: string; objectives: number }[]>,
+    ),
   getState: (pathId: string) =>
-    fetch(`${API_BASE}/learning/paths/${pathId}`).then(asJson<PathState>),
-
-  setMode: (pathId: string, sessionId: string, mode: Mode) =>
-    fetch(`${API_BASE}/learning/paths/${pathId}/sessions/${sessionId}/mode`, {
-      method: "PUT",
+    fetch(`${API_BASE}/learning/paths/${pathId}`).then(json<PathState>),
+  createPath: (pathId: string, goal: string, name = "") =>
+    post<PathState>(`${API_BASE}/learning/paths`, { path_id: pathId, goal, name }),
+  rename: (pathId: string, name: string) =>
+    fetch(`${API_BASE}/learning/paths/${pathId}`, {
+      method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode, actor: "learner" }),
-    }).then(asJson<{ mode: Mode }>),
-
+      body: JSON.stringify({ name }),
+    }).then(json<{ name: string }>),
+  redo: (pathId: string) => post<{ status: string }>(`${API_BASE}/learning/paths/${pathId}/redo`, {}),
+  remove: (pathId: string) =>
+    fetch(`${API_BASE}/learning/paths/${pathId}`, { method: "DELETE" }),
   putMap: (pathId: string, sessionId: string, body: unknown) =>
-    fetch(
+    put<{ status: string }>(
       `${API_BASE}/learning/paths/${pathId}/map?session_id=${encodeURIComponent(sessionId)}`,
-      {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-    ).then(asJson<{ status: string }>),
-
+      body,
+    ),
   override: (pathId: string, kpId: string, note = "") =>
-    fetch(`${API_BASE}/learning/paths/${pathId}/objectives/${kpId}/override`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ note }),
-    }).then(asJson<{ source: string }>),
-
+    post<{ source: string }>(
+      `${API_BASE}/learning/paths/${pathId}/objectives/${kpId}/override`,
+      { note },
+    ),
   resolveGap: (pathId: string, gapId: string, action: "accept" | "regenerate") =>
-    fetch(`${API_BASE}/learning/paths/${pathId}/gaps/${gapId}/resolve`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action }),
-    }).then(asJson<{ resolution: string }>),
-
+    post<{ resolution: string }>(`${API_BASE}/learning/paths/${pathId}/gaps/${gapId}/resolve`, {
+      action,
+    }),
+  setReviewSettings: (pathId: string, desiredRetention: number) =>
+    put<{ desired_retention: number }>(
+      `${API_BASE}/learning/paths/${pathId}/review-settings`,
+      { desired_retention: desiredRetention },
+    ),
+  setMode: (pathId: string, sessionId: string, mode: Mode, actor = "learner") =>
+    put<{ mode: Mode }>(
+      `${API_BASE}/learning/paths/${pathId}/sessions/${sessionId}/mode`,
+      { mode, actor },
+    ),
+  listSessions: (pathId: string) =>
+    fetch(`${API_BASE}/learning/paths/${pathId}/sessions`).then(
+      json<{ sessions: TopicSession[] }>,
+    ),
+  getSession: (sessionId: string) =>
+    fetch(`${API_BASE}/learning/sessions/${sessionId}`).then(
+      json<{ session: TopicSession; messages: unknown[] }>,
+    ),
+  attachSources: (pathId: string, folder: string) =>
+    post<unknown[]>(`${API_BASE}/learning/paths/${pathId}/sources`, { folder }),
   suggestQuestion: (pathId: string) =>
     fetch(`${API_BASE}/learning/paths/${pathId}/suggest-question`).then(
-      asJson<{ suggestion: string }>,
+      json<{ suggestion: string }>,
     ),
-
-  questions: (pathId: string) =>
-    fetch(`${API_BASE}/learning/paths/${pathId}/questions`).then(asJson<unknown[]>),
-
-  events: (pathId: string, since = 0) =>
-    fetch(`${API_BASE}/learning/paths/${pathId}/events?since=${since}`).then(
-      asJson<{ event_type: string }[]>,
+  questions: (pathId: string, tag?: string) =>
+    fetch(
+      `${API_BASE}/learning/paths/${pathId}/questions${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`,
+    ).then(json<unknown[]>),
+  quiz: (pathId: string, body: unknown) =>
+    post<{ question_id: string; question_card: unknown }>(`${API_BASE}/learning/paths/${pathId}/quiz`, body),
+  grade: (pathId: string, body: unknown) =>
+    post<{ status: string; result: string; gate_cleared: boolean }>(
+      `${API_BASE}/learning/paths/${pathId}/grade`,
+      body,
     ),
+  assess: (pathId: string, body: unknown) =>
+    post<{ passed: boolean }>(`${API_BASE}/learning/paths/${pathId}/assess`, body),
+  skipQuestion: (pathId: string, questionId: string) =>
+    post<{ status: string }>(`${API_BASE}/learning/paths/${pathId}/skip-question`, {
+      question_id: questionId,
+    }),
+
+  // settings
+  getSettings: (section: string) => fetch(`${API_BASE}/settings/${section}`).then(json<unknown>),
+  putSettings: (section: string, value: unknown) =>
+    put<unknown>(`${API_BASE}/settings/${section}`, value),
+  getProviders: () => fetch(`${API_BASE}/settings/providers`).then(json<Provider[]>),
 };
+
+export type { Provider, TopicSession };

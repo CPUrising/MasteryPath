@@ -8,10 +8,10 @@ export interface MapEntry {
   module_name: string;
   type: KnowledgeType;
   status: ObjectiveStatus;
-  source: string;
+  source: "system" | "learner" | "";
   mastery: number;
   threshold: number;
-  grounding: string;
+  grounding: "grounded" | "ungrounded";
 }
 
 export interface NextStep {
@@ -38,6 +38,38 @@ export interface PendingQuestion {
   attempt?: number;
 }
 
+export interface ReviewItem {
+  id: string;
+  knowledge_point_id: string;
+  knowledge_point_name: string;
+  knowledge_type: KnowledgeType;
+  due_at: number;
+  due: boolean;
+  forgetting_risk: number;
+  reason: string;
+  interval_index: number;
+  scheduled_after_failure: boolean;
+  desired_retention: number;
+  provenance: "system" | "learner";
+}
+
+export interface Source {
+  id: string;
+  kind: string;
+  source_id: string;
+  label: string;
+  excerpt: string;
+  available: boolean;
+}
+
+export interface Gap {
+  id: string;
+  kind: string;
+  ref: string;
+  reason: string;
+  resolution: string | null;
+}
+
 export interface PathState {
   status: string;
   path_id: string;
@@ -45,21 +77,47 @@ export interface PathState {
   goal: string;
   version: number;
   map: Record<string, MapEntry>;
+  counts: { mastered: number; learning: number; new: number; total: number };
   next: NextStep;
-  gaps: { id: string; kind: string; ref: string; resolution: string | null }[];
+  sources: Source[];
+  gaps: Gap[];
+  reviews: ReviewItem[];
+  review_settings: { desired_retention: number; scope: string };
+  session_count: number;
+  learner_profile: Record<string, string> | null;
   pending_question?: PendingQuestion | null;
-  due_reviews: unknown[];
+}
+
+export interface TopicSession {
+  session_id: string;
+  path_id: string;
+  title: string;
+  mode: Mode;
+  status: string;
+  message_count: number;
+  last_message: string;
+  has_pending_question: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SessionMessage {
+  id: number;
+  turn_id: string;
+  role: "user" | "assistant";
+  content: string;
+  data: { card?: PendingQuestion };
+  created_at: number;
 }
 
 export interface TurnEvent {
-  type:
-    | "text_delta"
-    | "tool_call"
-    | "tool_result"
-    | "question_card"
-    | "mode_changed"
-    | "usage"
-    | "turn_end"
-    | "error";
+  type: string;
   data: Record<string, unknown>;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
 }

@@ -9,10 +9,7 @@ export interface TurnRequest {
   turn_id?: string;
 }
 
-/**
- * Run one tutor turn over the WebSocket and stream events back.
- * The answer to a question card is just the next turn's `message`.
- */
+/** Run one tutor turn over the WebSocket and stream events back. */
 export function runTurn(
   request: TurnRequest,
   onEvent: (event: TurnEvent) => void,
