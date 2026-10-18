@@ -370,6 +370,8 @@ class LearningProgress(BaseModel):
     goal: str = ""
     # Selected sources (files/folders). Labels are what build payloads reference.
     sources: list["TopicSource"] = Field(default_factory=list)
+    # Free-form learner intake (prior knowledge / target / time budget / prefs).
+    learner_profile: dict[str, Any] | None = None
     modules: list[LearningModule] = Field(default_factory=list)
     current_module_id: str = ""
     current_kp_index: int = 0

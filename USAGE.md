@@ -146,6 +146,16 @@ events = AgentLoop(TOOLS).run(client, [{"role": "user", "content": "带我学 X"
 | GET | `/learning/paths/{id}/questions?tag=` | 题库 |
 | POST | `/learning/questions/{entry_id}/tags` | 打标签 `{tags:[...]}` |
 | PUT | `/learning/paths/{id}/sessions/{sid}/mode` | 切模式 `{mode, actor}` |
+| PATCH | `/learning/paths/{id}` | 改名 `{name}` |
+| POST | `/learning/paths/{id}/redo` | 重置进度（保留地图） |
+| PUT | `/learning/paths/{id}/review-settings` | 复习目标 `{desired_retention}` |
+| GET | `/learning/paths/{id}/sessions` | 会话列表 |
+| GET | `/learning/sessions/{sid}` | 会话详情（含消息） |
+| POST | `/learning/paths/{id}/quiz` | 出题（无需 LLM） |
+| POST | `/learning/paths/{id}/grade` | 判分（无需 LLM） |
+| POST | `/learning/paths/{id}/assess` | 定性评估 |
+| POST | `/learning/paths/{id}/skip-question` | 跳过当前题 |
+| GET/PUT | `/settings/{section}` | 配置：`providers`/`llm`/`task-models`/`embedding`/`general` |
 
 错误码：`409 mode_conflict` / `409 rebuild_requires_confirm` / `409 cas_conflict` / `412 precondition` / `422 invalid_map`。
 

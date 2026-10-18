@@ -140,6 +140,21 @@ ON CONFLICT(entry_id) DO UPDATE SET
     data=excluded.data, updated_at=excluded.updated_at
 """
 
+
+def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "session_id": row["session_id"],
+        "path_id": row["path_id"],
+        "title": row["title"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "message_count": row["message_count"],
+        "last_message": row["last_message"],
+        "has_pending_question": bool(row["has_pending_question"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paths (
     path_id    TEXT PRIMARY KEY,
@@ -175,6 +190,29 @@ CREATE TABLE IF NOT EXISTS question_bank (
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bank_path ON question_bank(path_id);
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id           TEXT PRIMARY KEY,
+    path_id              TEXT NOT NULL,
+    title                TEXT NOT NULL DEFAULT '',
+    mode                 TEXT NOT NULL DEFAULT 'study',
+    status               TEXT NOT NULL DEFAULT 'active',
+    message_count        INTEGER NOT NULL DEFAULT 0,
+    last_message         TEXT NOT NULL DEFAULT '',
+    has_pending_question INTEGER NOT NULL DEFAULT 0,
+    created_at           REAL NOT NULL,
+    updated_at           REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_path ON sessions(path_id);
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    turn_id    TEXT NOT NULL DEFAULT '',
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL DEFAULT '',
+    data       TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 """
 
 
@@ -439,6 +477,125 @@ class LearningStore:
                 (path_id,),
             ).fetchall()
         return [QuestionBankEntry.model_validate_json(row["data"]) for row in rows]
+
+    # -- sessions & messages ----------------------------------------------
+    def upsert_session(self, session: dict[str, Any]) -> dict[str, Any]:
+        now = time.time()
+        session.setdefault("created_at", now)
+        session["updated_at"] = now
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    """
+                    INSERT INTO sessions(session_id, path_id, title, mode, status,
+                        message_count, last_message, has_pending_question, created_at, updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        title=excluded.title, mode=excluded.mode, status=excluded.status,
+                        message_count=excluded.message_count, last_message=excluded.last_message,
+                        has_pending_question=excluded.has_pending_question,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        session["session_id"],
+                        session["path_id"],
+                        session.get("title", ""),
+                        session.get("mode", "study"),
+                        session.get("status", "active"),
+                        int(session.get("message_count", 0)),
+                        session.get("last_message", ""),
+                        1 if session.get("has_pending_question") else 0,
+                        session["created_at"],
+                        session["updated_at"],
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return session
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sessions WHERE session_id=?", (session_id,)
+            ).fetchone()
+        return _row_to_session(row) if row else None
+
+    def list_sessions(self, path_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE path_id=? ORDER BY updated_at DESC",
+                (path_id,),
+            ).fetchall()
+        return [_row_to_session(row) for row in rows]
+
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        *,
+        turn_id: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    "INSERT INTO messages(session_id, turn_id, role, content, data, created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        session_id,
+                        turn_id,
+                        role,
+                        content,
+                        json.dumps(data or {}, ensure_ascii=False),
+                        time.time(),
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def list_messages(self, session_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM messages WHERE session_id=? ORDER BY id", (session_id,)
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "turn_id": row["turn_id"],
+                "role": row["role"],
+                "content": row["content"],
+                "data": json.loads(row["data"]) if row["data"] else {},
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def delete_path(self, path_id: str) -> bool:
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    "DELETE FROM messages WHERE session_id IN "
+                    "(SELECT session_id FROM sessions WHERE path_id=?)",
+                    (path_id,),
+                )
+                self._conn.execute("DELETE FROM sessions WHERE path_id=?", (path_id,))
+                self._conn.execute("DELETE FROM question_bank WHERE path_id=?", (path_id,))
+                self._conn.execute("DELETE FROM interactions WHERE path_id=?", (path_id,))
+                cursor = self._conn.execute("DELETE FROM paths WHERE path_id=?", (path_id,))
+                deleted = cursor.rowcount > 0
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return deleted
 
     def close(self) -> None:
         with self._lock:

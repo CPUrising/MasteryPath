@@ -87,16 +87,48 @@ class LearningService:
         if progress is None:
             return {"status": "missing", "path_id": path_id}
         step = policy.next_objective(progress)
+        summary = policy.map_summary(progress)
+        counts = {"mastered": 0, "learning": 0, "new": 0, "total": len(summary)}
+        for entry in summary.values():
+            counts[entry["status"]] += 1
+        now = time.time()
+        reviews = [
+            {
+                "id": task.id,
+                "knowledge_point_id": task.knowledge_point_id,
+                "knowledge_point_name": (
+                    summary.get(task.knowledge_point_id, {}).get("name", "")
+                ),
+                "knowledge_type": task.knowledge_type.value,
+                "due_at": task.due_at,
+                "due": task.due_at <= now,
+                "forgetting_risk": task.forgetting_risk,
+                "reason": task.reason,
+                "interval_index": task.state.interval_index,
+                "scheduled_after_failure": task.state.scheduled_after_failure,
+                "desired_retention": task.state.desired_retention,
+                "provenance": task.state.provenance,
+            }
+            for task in progress.review_queue
+        ]
         return {
             "status": "active",
             "path_id": path_id,
             "name": progress.name,
             "goal": progress.goal,
             "version": progress.version,
-            "map": policy.map_summary(progress),
+            "map": summary,
+            "counts": counts,
             "next": step.to_dict(),
             "sources": [source.model_dump() for source in progress.sources],
             "gaps": [gap.model_dump() for gap in progress.source_gaps],
+            "reviews": reviews,
+            "review_settings": {
+                "desired_retention": progress.desired_retention,
+                "scope": "path",
+            },
+            "session_count": len(self.store.list_sessions(path_id)),
+            "learner_profile": progress.learner_profile,
             "pending_question": progress.pending_question
             and _public(progress.pending_question),
             "due_reviews": [task.model_dump() for task in policy.due_reviews(progress)],
@@ -498,6 +530,104 @@ class LearningService:
             raise PreconditionError(f"unknown question bank entry: {entry_id}")
         entry.tags = list(dict.fromkeys(str(tag) for tag in tags))
         return self.store.save_bank_entry(entry).model_dump()
+
+
+    # -- sessions (M7 backend) --------------------------------------------
+    def list_sessions(self, path_id: str) -> list[dict[str, Any]]:
+        return self.store.list_sessions(path_id)
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        session = self.store.get_session(session_id)
+        if session is None:
+            return None
+        return {"session": session, "messages": self.store.list_messages(session_id)}
+
+    def ensure_session(
+        self, path_id: str, session_id: str, *, mode: str = "study", title: str = ""
+    ) -> dict[str, Any]:
+        existing = self.store.get_session(session_id)
+        if existing is not None:
+            return existing
+        return self.store.upsert_session(
+            {
+                "session_id": session_id,
+                "path_id": path_id,
+                "title": title,
+                "mode": mode,
+                "status": "active",
+                "message_count": 0,
+                "last_message": "",
+                "has_pending_question": False,
+            }
+        )
+
+    def set_session_mode(self, path_id: str, session_id: str, mode: str) -> dict[str, Any]:
+        session = self.ensure_session(path_id, session_id)
+        session["mode"] = mode
+        return self.store.upsert_session(session)
+
+    def record_turn(
+        self,
+        path_id: str,
+        session_id: str,
+        *,
+        user_text: str,
+        assistant_text: str,
+        mode: str = "study",
+        turn_id: str = "",
+        card: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.ensure_session(path_id, session_id, mode=mode)
+        if not session.get("title") and user_text.strip():
+            session["title"] = user_text.strip()[:40]
+        self.store.append_message(session_id, "user", user_text, turn_id=turn_id)
+        self.store.append_message(
+            session_id,
+            "assistant",
+            assistant_text,
+            turn_id=turn_id,
+            data={"card": card} if card else None,
+        )
+        session["mode"] = mode
+        session["message_count"] = int(session.get("message_count", 0)) + 2
+        session["last_message"] = (assistant_text or user_text).strip()[:200]
+        session["has_pending_question"] = bool(card)
+        return self.store.upsert_session(session)
+
+    # -- path lifecycle (M7 backend) --------------------------------------
+    def rename(self, path_id: str, name: str) -> dict[str, Any]:
+        def fn(tx):
+            tx.progress.name = name
+            tx.emit("path.renamed", {"name": name})
+            return {"status": "renamed", "name": name}
+
+        return self.store.mutate(path_id, fn)
+
+    def reset(self, path_id: str) -> dict[str, Any]:
+        """Clear mastery evidence, questions and schedules; keep the map."""
+        from masterypath.learning.outline import _reset_learning_state
+
+        def fn(tx):
+            _reset_learning_state(tx.progress)
+            tx.emit("path.reset", {})
+            return {"status": "reset"}
+
+        return self.store.mutate(path_id, fn)
+
+    def set_review_settings(self, path_id: str, desired_retention: float) -> dict[str, Any]:
+        value = max(0.7, min(0.99, float(desired_retention)))
+
+        def fn(tx):
+            tx.progress.desired_retention = value
+            for state in tx.progress.repetition_states.values():
+                state.desired_retention = value
+            tx.emit("review.settings", {"desired_retention": value})
+            return {"desired_retention": value, "scope": "path"}
+
+        return self.store.mutate(path_id, fn)
+
+    def delete(self, path_id: str) -> bool:
+        return self.store.delete_path(path_id)
 
 
 def _schedule_after(
