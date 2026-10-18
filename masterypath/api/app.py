@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 
 from masterypath.agents.llm import DeepSeekClient
 from masterypath.agents.loop import AgentLoop
@@ -18,6 +20,20 @@ from masterypath.knowledge.loader import scan_folder
 from masterypath.settings.store import SECTIONS, SettingsStore, UnknownSection
 
 
+def _cors_origins() -> list[str]:
+    """Origins the browser UI may call from.
+
+    A separate Next dev server (localhost:3000) talking to the API on :8001 is
+    cross-origin, so without this every fetch fails with "Failed to fetch".
+    Override with ``MASTERYPATH_CORS_ORIGINS`` (comma-separated); default allows
+    any origin (no credentials are used).
+    """
+    raw = os.environ.get("MASTERYPATH_CORS_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return ["*"]
+
+
 def create_app(
     store: LearningStore,
     *,
@@ -27,6 +43,13 @@ def create_app(
     settings_store: SettingsStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title="MasteryPath")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
     service = LearningService(
         store, source_map=source_map, selected_source_ids=selected_source_ids
     )

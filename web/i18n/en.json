@@ -111,6 +111,7 @@
   "settings.removeModel": "Remove model",
   "settings.selectModelHint": "Select a model to view and edit its settings.",
   "settings.chooseProvider": "Choose a provider",
+  "settings.saveFailed": "Save failed: backend unreachable or not running.",
 
   "common.loading": "Loading…",
   "common.retry": "Retry",

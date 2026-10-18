@@ -139,6 +139,12 @@ def test_sessions_and_mode(env):
     assert detail["session"]["session_id"] == "s1" and detail["messages"] == []
 
 
+def test_cors_allows_frontend_origin(env):
+    client, _, _ = env
+    resp = client.get("/learning/paths", headers={"Origin": "http://localhost:3000"})
+    assert resp.headers.get("access-control-allow-origin") == "*"
+
+
 def test_ws_turn_persists_session(env):
     client, _, _ = env
     with client.websocket_connect("/ws") as ws:

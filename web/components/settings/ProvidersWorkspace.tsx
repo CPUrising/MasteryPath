@@ -17,15 +17,21 @@ export function ProvidersWorkspace() {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     api.getProviders().then(setProviders).catch(() => setProviders([]));
   }, []);
 
   const persist = async () => {
-    await api.putSettings("providers", providers);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
+    try {
+      await api.putSettings("providers", providers);
+      setSaved(true);
+      setError("");
+      window.setTimeout(() => setSaved(false), 1500);
+    } catch (reason) {
+      setError(String(reason));
+    }
   };
 
   const source = providers.find((provider) => provider.id === selected);
@@ -140,6 +146,7 @@ export function ProvidersWorkspace() {
                 >
                   {saved ? t("settings.saved") : t("settings.save")}
                 </button>
+                {error && <span className="text-[12px] text-destructive">{t("settings.saveFailed")}</span>}
                 <button
                   type="button"
                   onClick={() => {

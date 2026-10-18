@@ -26,6 +26,7 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     api.getProviders().then(setProviders).catch(() => setProviders([]));
@@ -37,9 +38,14 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
 
   const persist = async (next: ModelSection) => {
     setSection(next);
-    await api.putSettings(page, next);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
+    try {
+      await api.putSettings(page, next);
+      setSaved(true);
+      setError("");
+      window.setTimeout(() => setSaved(false), 1500);
+    } catch (reason) {
+      setError(String(reason));
+    }
   };
 
   const selectedModel = section.models.find((entry) => entry.id === selected);
@@ -176,6 +182,7 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
                 >
                   {saved ? t("settings.saved") : t("settings.save")}
                 </button>
+                {error && <span className="text-[12px] text-destructive">{t("settings.saveFailed")}</span>}
                 <button
                   type="button"
                   disabled={section.active_id === selectedModel.id}

@@ -111,6 +111,7 @@
   "settings.removeModel": "删除模型",
   "settings.selectModelHint": "选择一个模型以查看并编辑它的设置。",
   "settings.chooseProvider": "选择提供方",
+  "settings.saveFailed": "保存失败：后端不可达或未启动。",
 
   "common.loading": "加载中…",
   "common.retry": "重试",
