@@ -2,8 +2,7 @@
 
 import { useTranslation } from "react-i18next";
 
-import { EmbeddingSettings } from "./EmbeddingSettings";
-import { ModelsWorkspace, TaskModelsWorkspace } from "./ModelsWorkspace";
+import { ModelsWorkspace } from "./ModelsWorkspace";
 import { ProvidersWorkspace } from "./ProvidersWorkspace";
 import { SettingsOverview } from "./SettingsOverview";
 
@@ -13,16 +12,16 @@ export function SettingsPageContent({ section }: { section: string }) {
     case "connections":
       return <ProvidersWorkspace />;
     case "llm":
-      return <ModelsWorkspace />;
+      return <ModelsWorkspace page="llm" />;
     case "task-models":
-      return <TaskModelsWorkspace />;
+      return <ModelsWorkspace page="task-models" />;
     case "embedding":
-      return <EmbeddingSettings />;
+      return <ModelsWorkspace page="embedding" />;
     case "general":
       return <SettingsOverview />;
     default:
       return (
-        <div className="p-6">
+        <div>
           <h1 className="text-lg font-semibold">{t("settings.title")}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{section}</p>
         </div>

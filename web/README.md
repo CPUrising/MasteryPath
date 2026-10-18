@@ -34,8 +34,9 @@ components/
             ProgressRing,ReviewTrail,SessionCamp,LearnerProfileCard,ModeSwitch,
             MasteryComposer,QuestionCard,LevelUpCelebration,
             CreateTopicWizard,EditTopicRouteDialog}
-  settings/{SettingsNav,SettingsPageContent,ProvidersWorkspace,ModelsWorkspace,
-            EmbeddingSettings,SettingsOverview,shared}
+  settings/{SettingsShell,SettingsNav,SettingsPageContent,WorkspaceShell,
+            ProviderCatalog,AddProviderPanel,ProvidersWorkspace,
+            AddModelPanel,ModelsWorkspace,SettingsOverview,shared}
 lib/{api,ws,types,mastery-mode,learning-routes,i18n}
 i18n/{zh,en}.json
 ```

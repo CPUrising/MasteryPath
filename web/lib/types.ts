@@ -121,3 +121,16 @@ export interface Provider {
   base_url: string;
   api_key: string;
 }
+
+export interface ModelEntry {
+  id: string;
+  provider_id: string;
+  model: string;
+  name: string;
+  dimension?: number;
+}
+
+export interface ModelSection {
+  models: ModelEntry[];
+  active_id: string;
+}

@@ -14,17 +14,45 @@ from typing import Any
 
 _DEFAULTS: dict[str, Any] = {
     "providers": [],
-    "llm": {"provider_id": "", "model": ""},
-    "task-models": {"provider_id": "", "model": ""},
-    "embedding": {"provider": "", "model": "", "dimension": 0},
+    # Model pages are lists with one active entry (DeepTutor parity).
+    "llm": {"models": [], "active_id": ""},
+    "task-models": {"models": [], "active_id": ""},
+    "embedding": {"models": [], "active_id": ""},
     "general": {"interface_language": "zh", "response_language": "zh"},
 }
+
+#: Sections shaped as ``{models: [...], active_id: ""}``.
+MODEL_SECTIONS: tuple[str, ...] = ("llm", "task-models", "embedding")
 
 SECTIONS: tuple[str, ...] = tuple(_DEFAULTS)
 
 
 def default_settings() -> dict[str, Any]:
     return json.loads(json.dumps(_DEFAULTS))
+
+
+def _normalize_model_section(value: Any) -> dict[str, Any]:
+    """Coerce a stored model section to ``{models: [...], active_id: str}``.
+
+    Older payloads stored a single ``{provider_id, model}``; that is folded into
+    a one-entry list so an upgrade keeps whatever was configured.
+    """
+    if not isinstance(value, dict):
+        return {"models": [], "active_id": ""}
+    models = value.get("models")
+    if not isinstance(models, list):
+        models = []
+        legacy_model = str(value.get("model") or "").strip()
+        if legacy_model:
+            models = [
+                {
+                    "id": "m1",
+                    "provider_id": str(value.get("provider_id") or value.get("provider") or ""),
+                    "model": legacy_model,
+                    "name": legacy_model,
+                }
+            ]
+    return {"models": models, "active_id": str(value.get("active_id") or "")}
 
 
 class UnknownSection(KeyError):
@@ -51,6 +79,8 @@ class SettingsStore:
                         merged[key].update(value)
                     else:
                         merged[key] = value
+            for name in MODEL_SECTIONS:
+                merged[name] = _normalize_model_section(merged[name])
             return merged
 
     def section(self, name: str) -> Any:
@@ -61,6 +91,8 @@ class SettingsStore:
     def write_section(self, name: str, value: Any) -> Any:
         if name not in _DEFAULTS:
             raise UnknownSection(name)
+        if name in MODEL_SECTIONS:
+            value = _normalize_model_section(value)
         with self._lock:
             data = self.read()
             data[name] = value

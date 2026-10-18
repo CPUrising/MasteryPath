@@ -1,6 +1,5 @@
-import AppShell from "@/components/layout/AppShell";
-import { SettingsNav } from "@/components/settings/SettingsNav";
+import { SettingsShell } from "@/components/settings/SettingsShell";
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
-  return <AppShell sidebar={<SettingsNav />}>{children}</AppShell>;
+  return <SettingsShell>{children}</SettingsShell>;
 }

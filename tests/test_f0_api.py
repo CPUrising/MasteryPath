@@ -44,13 +44,28 @@ def env(tmp_path):
 
 def test_settings_roundtrip(env):
     client, _, _ = env
-    assert client.get("/settings/llm").json() == {"provider_id": "", "model": ""}
+    assert client.get("/settings/llm").json() == {"models": [], "active_id": ""}
     providers = [
         {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com", "api_key": "sk-x"}
     ]
     assert client.put("/settings/providers", json=providers).json() == providers
     assert client.get("/settings/providers").json() == providers
     assert client.get("/settings/nope").status_code == 404
+
+
+def test_model_section_list_roundtrip(env):
+    client, _, _ = env
+    section = {
+        "models": [
+            {"id": "m1", "provider_id": "deepseek", "model": "deepseek-chat", "name": "Chat"}
+        ],
+        "active_id": "m1",
+    }
+    assert client.put("/settings/llm", json=section).json() == section
+    assert client.get("/settings/llm").json() == section
+    # legacy single-selection shape folds into a one-entry list
+    legacy = client.put("/settings/embedding", json={"provider": "ollama", "model": "bge-m3"}).json()
+    assert legacy["models"][0]["model"] == "bge-m3"
 
 
 def test_dashboard_fields(env):
