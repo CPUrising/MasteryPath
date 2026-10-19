@@ -4,36 +4,41 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { PROVIDER_CATALOG, type CatalogProvider } from "./ProviderCatalog";
-import { TextInput } from "./shared";
+import { Field, TextInput } from "./shared";
+import type { ProviderProtocol } from "@/lib/types";
 
 export interface NewProviderInput {
   name: string;
   base_url: string;
   requires_key: boolean;
+  protocol: ProviderProtocol;
 }
 
 /** Add a provider by picking a card, like DeepTutor's Add provider panel. */
 export function AddProviderPanel({
   onCancel,
   onCreate,
+  catalog = PROVIDER_CATALOG,
 }: {
   onCancel: () => void;
   onCreate: (input: NewProviderInput) => void;
+  catalog?: CatalogProvider[];
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string>("");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [protocol, setProtocol] = useState<ProviderProtocol>("openai");
 
   const options = useMemo(
     () =>
-      PROVIDER_CATALOG.filter((provider) =>
+      catalog.filter((provider) =>
         `${provider.name} ${provider.id}`.toLowerCase().includes(query.trim().toLowerCase()),
       ),
-    [query],
+    [catalog, query],
   );
-  const selected: CatalogProvider | undefined = PROVIDER_CATALOG.find((p) => p.id === picked);
+  const selected: CatalogProvider | undefined = catalog.find((p) => p.id === picked);
   const custom = picked === "custom";
 
   const submit = () => {
@@ -42,6 +47,7 @@ export function AddProviderPanel({
       name: custom ? name.trim() : selected.name,
       base_url: custom ? url.trim() : selected.base_url,
       requires_key: selected.requires_key,
+      protocol: custom ? protocol : selected.protocol,
     });
   };
 
@@ -88,8 +94,23 @@ export function AddProviderPanel({
       </div>
       {custom && (
         <div className="grid gap-3 rounded-xl border border-border bg-background p-4 sm:grid-cols-2">
-          <TextInput value={name} onChange={setName} />
-          <TextInput value={url} onChange={setUrl} />
+          <Field label={t("settings.provider.name")}>
+            <TextInput value={name} onChange={setName} />
+          </Field>
+          <Field label={t("settings.provider.url")}>
+            <TextInput value={url} onChange={setUrl} />
+          </Field>
+          <Field label={t("settings.provider.protocol")}>
+            <select
+              value={protocol}
+              onChange={(event) => setProtocol(event.target.value as ProviderProtocol)}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="openai">{t("settings.protocol.openai")}</option>
+              <option value="ollama">{t("settings.protocol.ollama")}</option>
+              <option value="anthropic">{t("settings.protocol.anthropic")}</option>
+            </select>
+          </Field>
         </div>
       )}
       <div className="flex gap-2 border-t border-border pt-4">

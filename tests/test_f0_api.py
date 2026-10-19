@@ -46,7 +46,13 @@ def test_settings_roundtrip(env):
     client, _, _ = env
     assert client.get("/settings/llm").json() == {"models": [], "active_id": ""}
     providers = [
-        {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com", "api_key": "sk-x"}
+        {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-x",
+            "protocol": "openai",
+        }
     ]
     assert client.put("/settings/providers", json=providers).json() == providers
     assert client.get("/settings/providers").json() == providers

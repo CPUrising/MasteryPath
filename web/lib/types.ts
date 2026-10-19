@@ -120,6 +120,36 @@ export interface Provider {
   name: string;
   base_url: string;
   api_key: string;
+  protocol?: ProviderProtocol;
+  detection?: ProviderDetection;
+}
+
+export type ProviderProtocol = "openai" | "anthropic" | "ollama" | "custom";
+
+export type ModelService = "llm" | "task" | "embedding";
+
+export interface DetectedModel {
+  id: string;
+  services: ModelService[];
+}
+
+export interface ProviderDetection {
+  status: string;
+  models: DetectedModel[];
+  http_status?: number | null;
+  warning?: string;
+  checked_at?: string;
+}
+
+export interface CatalogProvider {
+  id: string;
+  name: string;
+  base_url: string;
+  protocol: ProviderProtocol;
+  services: ModelService[];
+  requires_key: boolean;
+  /** Two-letter monogram shown when there is no brand icon. */
+  monogram: string;
 }
 
 export interface ModelEntry {
@@ -128,6 +158,7 @@ export interface ModelEntry {
   model: string;
   name: string;
   dimension?: number;
+  services?: ModelService[];
 }
 
 export interface ModelSection {

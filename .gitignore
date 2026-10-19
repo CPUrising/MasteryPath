@@ -49,3 +49,6 @@ desktop.ini
 
 #OTHER
 SRS.md
+*.pdf
+*.docx
+*.html

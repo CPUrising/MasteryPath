@@ -25,7 +25,7 @@ export function SettingsOverview() {
     <div>
       <SettingsPageHeader title={t("settings.general.title")} description={t("settings.general.desc")} />
       <SettingsSection title={t("settings.general.title")}>
-        <Field label="Interface language">
+        <Field label={t("settings.language.interface")}>
           <select
             value={value.interface_language}
             onChange={(event) => {
@@ -39,7 +39,7 @@ export function SettingsOverview() {
             <option value="en">English</option>
           </select>
         </Field>
-        <Field label="Response language">
+        <Field label={t("settings.language.response")}>
           <select
             value={value.response_language}
             onChange={(event) => setValue({ ...value, response_language: event.target.value })}

@@ -24,7 +24,48 @@ _DEFAULTS: dict[str, Any] = {
 #: Sections shaped as ``{models: [...], active_id: ""}``.
 MODEL_SECTIONS: tuple[str, ...] = ("llm", "task-models", "embedding")
 
+#: Protocols a provider can speak. ``openai`` covers every OpenAI-compatible
+#: endpoint (the common case); ``anthropic`` and ``ollama`` get their own auth
+#: and discovery paths; ``custom`` keeps whatever the user typed.
+PROVIDER_PROTOCOLS: tuple[str, ...] = ("openai", "anthropic", "ollama", "custom")
+
 SECTIONS: tuple[str, ...] = tuple(_DEFAULTS)
+
+
+def _normalize_provider(value: Any) -> Any:
+    """Coerce one provider entry, defaulting ``protocol`` and dropping junk detection.
+
+    ``detection`` is a cache of the last probe result. It is kept verbatim so a
+    load/edit/save round trip preserves it, but anything that is not a dict is
+    discarded rather than served to the UI.
+    """
+    if not isinstance(value, dict):
+        return value
+    provider = dict(value)
+    protocol = str(provider.get("protocol") or "").strip().lower()
+    provider["protocol"] = protocol if protocol in PROVIDER_PROTOCOLS else "openai"
+    detection = provider.get("detection")
+    if not isinstance(detection, dict):
+        provider.pop("detection", None)
+    return provider
+
+
+def _normalize_providers(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    return [_normalize_provider(item) for item in value]
+
+
+def _normalize_model_entry(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    entry = dict(value)
+    services = entry.get("services")
+    if isinstance(services, list):
+        entry["services"] = [str(item) for item in services if item]
+    else:
+        entry.pop("services", None)
+    return entry
 
 
 def default_settings() -> dict[str, Any]:
@@ -52,7 +93,10 @@ def _normalize_model_section(value: Any) -> dict[str, Any]:
                     "name": legacy_model,
                 }
             ]
-    return {"models": models, "active_id": str(value.get("active_id") or "")}
+    return {
+        "models": [_normalize_model_entry(item) for item in models],
+        "active_id": str(value.get("active_id") or ""),
+    }
 
 
 class UnknownSection(KeyError):
@@ -81,6 +125,7 @@ class SettingsStore:
                         merged[key] = value
             for name in MODEL_SECTIONS:
                 merged[name] = _normalize_model_section(merged[name])
+            merged["providers"] = _normalize_providers(merged.get("providers"))
             return merged
 
     def section(self, name: str) -> Any:
@@ -93,6 +138,8 @@ class SettingsStore:
             raise UnknownSection(name)
         if name in MODEL_SECTIONS:
             value = _normalize_model_section(value)
+        elif name == "providers":
+            value = _normalize_providers(value)
         with self._lock:
             data = self.read()
             data[name] = value

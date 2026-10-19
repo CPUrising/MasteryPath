@@ -228,9 +228,9 @@ store.close()
 ## 10. 前端（M7，暂未验收）
 
 ```bash
-cd web
-npm install
-npm run dev
+cd web;
+npm install;
+npm run dev;
 ```
 
 入口：

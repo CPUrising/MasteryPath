@@ -17,6 +17,7 @@ from masterypath.learning.outline import OutlineError
 from masterypath.learning.service import LearningService
 from masterypath.learning.storage import LearningStore, PreconditionError
 from masterypath.knowledge.loader import scan_folder
+from masterypath.settings import providers as provider_probe
 from masterypath.settings.store import SECTIONS, SettingsStore, UnknownSection
 
 
@@ -294,6 +295,67 @@ def create_app(
             return settings.write_section(section, payload)
         except UnknownSection:
             raise HTTPException(status_code=404, detail=f"unknown settings section: {section}")
+
+    # -- provider detection (read-only probes; never write configuration) --
+    def _probe_fields(payload: dict[str, Any]) -> dict[str, Any]:
+        """Merge posted fields over the saved provider named by ``provider_id``.
+
+        The editor posts what is on screen; a masked/absent key and omitted
+        fields fall back to the saved entry so "Test connection" works without
+        re-typing a stored credential.
+        """
+        provider_id = str(payload.get("provider_id") or "")
+        saved = next(
+            (
+                item
+                for item in settings.section("providers")
+                if isinstance(item, dict) and item.get("id") == provider_id
+            ),
+            {},
+        )
+        api_key = payload.get("api_key")
+        if not api_key and provider_id:
+            api_key = saved.get("api_key")
+        return {
+            "protocol": str(payload.get("protocol") or saved.get("protocol") or "openai"),
+            "base_url": str(payload.get("base_url") or saved.get("base_url") or ""),
+            "api_key": api_key,
+            "service": str(payload.get("service") or ""),
+        }
+
+    @app.get("/settings/providers/catalog")
+    def get_provider_catalog() -> list[dict[str, Any]]:
+        return provider_probe.provider_catalog()
+
+    @app.post("/settings/providers/probe")
+    def probe_settings_provider(payload: dict[str, Any] = Body(default={})) -> dict:
+        fields = _probe_fields(payload)
+        return provider_probe.probe_provider(
+            fields["protocol"],
+            fields["base_url"],
+            fields["api_key"],
+            service=fields["service"],
+        )
+
+    @app.post("/settings/providers/fetch-models")
+    def fetch_settings_provider_models(payload: dict[str, Any] = Body(default={})) -> dict:
+        fields = _probe_fields(payload)
+        return provider_probe.fetch_models(
+            fields["protocol"],
+            fields["base_url"],
+            fields["api_key"],
+            service=fields["service"],
+        )
+
+    @app.post("/settings/models/detect-dimension")
+    def detect_settings_model_dimension(payload: dict[str, Any] = Body(default={})) -> dict:
+        fields = _probe_fields(payload)
+        return provider_probe.detect_dimension(
+            fields["protocol"],
+            fields["base_url"],
+            fields["api_key"],
+            str(payload.get("model") or ""),
+        )
 
     # -- sessions / mode ---------------------------------------------------
     @app.get("/learning/paths/{path_id}/sessions")

@@ -26,6 +26,7 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [saved, setSaved] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -61,11 +62,59 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
     setAdding(false);
   };
 
+  const createMany = (inputs: NewModelInput[]) => {
+    if (!inputs.length) return;
+    const stamp = Date.now().toString(36);
+    const entries: ModelEntry[] = inputs.map((input, index) => ({
+      id: `m-${stamp}-${index}`,
+      ...input,
+    }));
+    void persist({
+      models: [...section.models, ...entries],
+      active_id: section.active_id || entries[0].id,
+    });
+    setSelected(entries[0].id);
+    setAdding(false);
+  };
+
+  const detectDimension = async () => {
+    if (!selectedModel) return;
+    const provider = providers.find((item) => item.id === selectedModel.provider_id);
+    if (!provider) return;
+    setDetecting(true);
+    try {
+      const result = await api.detectDimension({
+        provider_id: provider.id,
+        protocol: provider.protocol ?? "openai",
+        base_url: provider.base_url,
+        api_key: provider.api_key,
+        model: selectedModel.model,
+      });
+      if (result.status === "connected" && result.dimension > 0) {
+        await persist({
+          ...section,
+          models: section.models.map((entry) =>
+            entry.id === selectedModel.id ? { ...entry, dimension: result.dimension } : entry,
+          ),
+        });
+      }
+    } finally {
+      setDetecting(false);
+    }
+  };
+
   if (adding) {
     return (
       <div>
         <SettingsPageHeader title={t(TITLES[page].title)} description={t(TITLES[page].desc)} />
-        <AddModelPanel providers={providers} withDimension={withDimension} onCancel={() => setAdding(false)} onCreate={create} />
+        <AddModelPanel
+          providers={providers}
+          withDimension={withDimension}
+          service={page === "llm" ? "llm" : page === "task-models" ? "task" : "embedding"}
+          onCancel={() => setAdding(false)}
+          onCreate={create}
+          onCreateMany={createMany}
+        />
       </div>
     );
   }
@@ -159,18 +208,28 @@ export function ModelsWorkspace({ page }: { page: ModelPage }) {
                   />
                 </Field>
                 {withDimension && (
-                  <Field label="dimension">
-                    <TextInput
-                      value={String(selectedModel.dimension ?? 0)}
-                      onChange={(value) =>
-                        setSection({
-                          ...section,
-                          models: section.models.map((entry) =>
-                            entry.id === selectedModel.id ? { ...entry, dimension: Number(value) || 0 } : entry,
-                          ),
-                        })
-                      }
-                    />
+                  <Field label={t("settings.model.dimension")}>
+                    <div className="flex items-start gap-2">
+                      <TextInput
+                        value={String(selectedModel.dimension ?? 0)}
+                        onChange={(value) =>
+                          setSection({
+                            ...section,
+                            models: section.models.map((entry) =>
+                              entry.id === selectedModel.id ? { ...entry, dimension: Number(value) || 0 } : entry,
+                            ),
+                          })
+                        }
+                      />
+                      <button
+                        type="button"
+                        disabled={detecting || !selectedModel.model.trim()}
+                        onClick={() => void detectDimension()}
+                        className="h-9 shrink-0 rounded-lg border border-border px-3 text-[13px] hover:bg-accent/60 disabled:opacity-50"
+                      >
+                        {detecting ? t("settings.model.detecting") : t("settings.model.detect")}
+                      </button>
+                    </div>
                   </Field>
                 )}
               </div>

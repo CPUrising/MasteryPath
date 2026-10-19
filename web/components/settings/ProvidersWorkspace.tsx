@@ -5,14 +5,17 @@ import { Cable, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AddProviderPanel, type NewProviderInput } from "./AddProviderPanel";
+import { PROVIDER_CATALOG } from "./ProviderCatalog";
+import { ProviderProbe } from "./ProviderProbe";
 import { Field, SettingsPageHeader, TextInput } from "./shared";
 import { WorkspaceDetailEmpty, WorkspaceRail, WorkspaceSplit, workspaceCardClass } from "./WorkspaceShell";
 import { api } from "@/lib/api";
-import type { Provider } from "@/lib/types";
+import type { CatalogProvider, Provider, ProviderProtocol } from "@/lib/types";
 
 export function ProvidersWorkspace() {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [catalog, setCatalog] = useState<CatalogProvider[]>(PROVIDER_CATALOG);
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
@@ -21,6 +24,7 @@ export function ProvidersWorkspace() {
 
   useEffect(() => {
     api.getProviders().then(setProviders).catch(() => setProviders([]));
+    api.getProviderCatalog().then(setCatalog).catch(() => undefined);
   }, []);
 
   const persist = async () => {
@@ -41,7 +45,13 @@ export function ProvidersWorkspace() {
 
   const create = async (input: NewProviderInput) => {
     const id = `conn-${Date.now().toString(36)}`;
-    const entry: Provider = { id, name: input.name, base_url: input.base_url, api_key: "" };
+    const entry: Provider = {
+      id,
+      name: input.name,
+      base_url: input.base_url,
+      api_key: "",
+      protocol: input.protocol,
+    };
     setProviders((rows) => [...rows, entry]);
     setSelected(id);
     setAdding(false);
@@ -51,7 +61,7 @@ export function ProvidersWorkspace() {
     return (
       <div>
         <SettingsPageHeader title={t("settings.conn.title")} description={t("settings.conn.desc")} />
-        <AddProviderPanel onCancel={() => setAdding(false)} onCreate={create} />
+        <AddProviderPanel catalog={catalog} onCancel={() => setAdding(false)} onCreate={create} />
       </div>
     );
   }
@@ -137,7 +147,41 @@ export function ProvidersWorkspace() {
                     }
                   />
                 </Field>
+                <Field label={t("settings.provider.protocol")}>
+                  <select
+                    value={source.protocol ?? "openai"}
+                    onChange={(event) =>
+                      setProviders((rows) =>
+                        rows.map((row) =>
+                          row.id === source.id
+                            ? { ...row, protocol: event.target.value as ProviderProtocol, detection: undefined }
+                            : row,
+                        ),
+                      )
+                    }
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="openai">{t("settings.protocol.openai")}</option>
+                    <option value="ollama">{t("settings.protocol.ollama")}</option>
+                    <option value="anthropic">{t("settings.protocol.anthropic")}</option>
+                    <option value="custom">{t("settings.protocol.custom")}</option>
+                  </select>
+                </Field>
               </div>
+              <ProviderProbe
+                key={`${source.id}:${source.protocol}:${source.base_url}:${source.api_key}`}
+                fields={{
+                  provider_id: source.id,
+                  protocol: source.protocol ?? "openai",
+                  base_url: source.base_url,
+                  api_key: source.api_key,
+                }}
+                onResult={(result) =>
+                  setProviders((rows) =>
+                    rows.map((row) => (row.id === source.id ? { ...row, detection: result } : row)),
+                  )
+                }
+              />
               <div className="mt-5 flex items-center gap-2 border-t border-border pt-4">
                 <button
                   type="button"

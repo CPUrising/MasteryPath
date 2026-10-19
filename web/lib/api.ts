@@ -1,7 +1,27 @@
-import type { Mode, PathState, Provider, TopicSession } from "./types";
+import type {
+  CatalogProvider,
+  DetectedModel,
+  Mode,
+  ModelService,
+  PathState,
+  Provider,
+  ProviderDetection,
+  ProviderProtocol,
+  TopicSession,
+} from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001";
 export const WS_BASE = API_BASE.replace(/^http/, "ws");
+
+/** Fields a provider probe can be given; a saved provider_id fills the blanks. */
+export interface ProbeInput {
+  provider_id?: string;
+  protocol?: ProviderProtocol;
+  base_url?: string;
+  api_key?: string;
+  service?: ModelService | "";
+}
+
 
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
@@ -101,6 +121,22 @@ export const api = {
   putSettings: (section: string, value: unknown) =>
     put<unknown>(`${API_BASE}/settings/${section}`, value),
   getProviders: () => fetch(`${API_BASE}/settings/providers`).then(json<Provider[]>),
+
+  // provider detection (read-only probes)
+  getProviderCatalog: () =>
+    fetch(`${API_BASE}/settings/providers/catalog`).then(json<CatalogProvider[]>),
+  probeProvider: (input: ProbeInput) =>
+    post<ProviderDetection>(`${API_BASE}/settings/providers/probe`, input),
+  fetchModels: (input: ProbeInput) =>
+    post<{ status: string; models: DetectedModel[] }>(
+      `${API_BASE}/settings/providers/fetch-models`,
+      input,
+    ),
+  detectDimension: (input: ProbeInput & { model: string }) =>
+    post<{ status: string; dimension: number }>(
+      `${API_BASE}/settings/models/detect-dimension`,
+      input,
+    ),
 };
 
 export type { Provider, TopicSession };
