@@ -19,6 +19,8 @@ _DEFAULTS: dict[str, Any] = {
     "task-models": {"models": [], "active_id": ""},
     "embedding": {"models": [], "active_id": ""},
     "general": {"interface_language": "zh", "response_language": "zh"},
+    # Defaults for how knowledge-base documents are chunked (token units).
+    "indexing": {"chunk_size": 512, "chunk_overlap": 64},
 }
 
 #: Sections shaped as ``{models: [...], active_id: ""}``.

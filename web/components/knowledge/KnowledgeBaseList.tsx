@@ -91,6 +91,7 @@ export function KnowledgeBaseList() {
               </p>
               <p className="mt-1 flex items-center gap-2 text-[12px] text-muted-foreground">
                 <span>{t("kb.docCount", { count: kb.doc_count })}</span>
+                <span>· {t("kb.chunkCount", { count: kb.chunk_count })}</span>
                 <span>· {t(`kb.status.${kb.status}`, kb.status)}</span>
               </p>
             </Link>

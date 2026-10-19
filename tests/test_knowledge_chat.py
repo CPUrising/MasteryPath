@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from masterypath.api.app import create_app
 from masterypath.learning.storage import LearningStore
+
+
+def _wait_ready(client: TestClient, kb_id: str, timeout: float = 60.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        progress = client.get(f"/knowledge-bases/{kb_id}/progress").json()
+        if progress.get("status") not in {"indexing"}:
+            return progress
+        time.sleep(0.1)
+    raise AssertionError("indexing did not finish in time")
 
 
 def _fake_embedder(_config):
@@ -109,11 +122,21 @@ def test_import_index_and_search(env, tmp_path):
     result = env.post(
         f"/knowledge-bases/{kb['id']}/folders", json={"folder": str(folder)}
     ).json()
-    assert result["status"] == "ready"
-    assert result["doc_count"] == 1
+    assert result["status"] == "indexing"
+    assert result["total_files"] == 1
+
+    progress = _wait_ready(env, kb["id"])
+    assert progress["status"] == "ready"
+    assert progress["percent"] == 1.0
+
+    detail = env.get(f"/knowledge-bases/{kb['id']}").json()
+    assert detail["status"] == "ready"
+    assert detail["doc_count"] == 1
+    assert detail["chunk_count"] > 0
 
     files = env.get(f"/knowledge-bases/{kb['id']}/files").json()
     assert [item["path"] for item in files] == ["gravity.md"]
+    assert files[0]["linked"] is False
 
     detail = env.get(f"/knowledge-bases/{kb['id']}").json()
     assert detail["embedding_model"]["model_id"] == "e1"
@@ -124,8 +147,10 @@ def test_reindex_requires_documents(env):
     _configure_models(env)
     kb = env.post("/knowledge-bases", json={"name": "Blank"}).json()
     result = env.post(f"/knowledge-bases/{kb['id']}/reindex").json()
-    assert result["status"] == "error"
-    assert "no readable documents" in result["error"]
+    assert result["status"] == "empty"
+    progress = env.get(f"/knowledge-bases/{kb['id']}/progress").json()
+    assert progress["status"] == "empty"
+    assert progress["percent"] is None
 
 
 def test_delete_and_unknown(env):
@@ -166,6 +191,7 @@ def test_chat_injects_knowledge_context(env, tmp_path):
         "Gravity draws objects toward a center.", encoding="utf-8"
     )
     env.post(f"/knowledge-bases/{kb['id']}/folders", json={"folder": str(folder)})
+    assert _wait_ready(env, kb["id"])["status"] == "ready"
 
     session = env.post("/chat/sessions", json={"kb_ids": [kb["id"]]}).json()
     env.post(f"/chat/sessions/{session['session_id']}/turns", json={"message": "gravity"})
@@ -221,3 +247,167 @@ def test_global_question_bank(env):
     rows = env.get("/questions").json()
     assert rows and rows[0]["path_name"] == "Topic"
     assert rows[0]["question"] == "2+2?"
+
+
+# -- indexing progress / upload -------------------------------------------
+
+
+def test_build_index_reports_file_progress(tmp_path):
+    from masterypath.knowledge import indexer
+    from masterypath.knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path)
+    kb = store.create("Progress")
+    raw = store.raw_dir(kb["id"])
+    for index in range(3):
+        (raw / f"f{index}.md").write_text("word " * 200, encoding="utf-8")
+    calls: list[tuple[int, int]] = []
+    result = indexer.build_index(
+        store,
+        kb["id"],
+        _fake_embedder(None),
+        on_progress=lambda indexed, total: calls.append((indexed, total)),
+    )
+    assert calls[0] == (0, 3)
+    assert calls[-1] == (3, 3)
+    assert result["documents"] == 3
+    assert result["chunks"] > 0
+
+
+def test_upload_indexes_and_reports_chunks(env):
+    _configure_models(env)
+    kb = env.post("/knowledge-bases", json={"name": "Uploads"}).json()
+    response = env.post(
+        f"/knowledge-bases/{kb['id']}/upload",
+        files={"files": ("note.md", b"Binary search halves a sorted list.")},
+        data={"paths": json.dumps(["note.md"])},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "indexing"
+    assert body["uploaded"] == 1
+
+    progress = _wait_ready(env, kb["id"])
+    assert progress["status"] == "ready"
+    detail = env.get(f"/knowledge-bases/{kb['id']}").json()
+    assert detail["doc_count"] == 1
+    assert detail["chunk_count"] > 0
+
+
+def test_upload_path_traversal_rejected(env):
+    _configure_models(env)
+    kb = env.post("/knowledge-bases", json={"name": "Safe"}).json()
+    response = env.post(
+        f"/knowledge-bases/{kb['id']}/upload",
+        files={"files": ("evil.md", b"x")},
+        data={"paths": json.dumps(["../evil.md"])},
+    )
+    assert response.status_code == 422
+
+
+def test_concurrent_reindex_runs_once(tmp_path):
+    import threading
+
+    store = LearningStore(tmp_path)
+
+    def slow_embedder(_config):
+        def embed(texts: list[str]) -> list[list[float]]:
+            time.sleep(0.05)
+            return [[1.0] * 4 for _ in texts]
+        return embed
+
+    app = create_app(store, embedder_factory=slow_embedder)
+    with TestClient(app) as client:
+        _configure_models(client)
+        kb = client.post("/knowledge-bases", json={"name": "Race"}).json()
+        folder = tmp_path / "race"
+        folder.mkdir()
+        for index in range(4):
+            (folder / f"doc{index}.md").write_text("content " * 100, encoding="utf-8")
+        first = client.post(
+            f"/knowledge-bases/{kb['id']}/folders", json={"folder": str(folder)}
+        ).json()
+        assert first["status"] == "indexing"
+        second = client.post(f"/knowledge-bases/{kb['id']}/reindex").json()
+        # The duplicate request returns the SAME run rather than starting another.
+        assert second["run_id"] == first["run_id"]
+        assert threading.active_count() >= 1
+        assert _wait_ready(client, kb["id"])["status"] == "ready"
+    store.close()
+
+
+# -- chunking configuration -----------------------------------------------
+
+
+def test_global_default_and_kb_override(env):
+    _configure_models(env)
+    kb = env.post("/knowledge-bases", json={"name": "Chunked"}).json()
+    assert kb["effective_config"] == {"chunk_size": 512, "chunk_overlap": 64}
+    assert kb["index_config_source"] == "global"
+
+    env.put("/settings/indexing", json={"chunk_size": 800, "chunk_overlap": 100})
+    updated = env.get(f"/knowledge-bases/{kb['id']}").json()
+    assert updated["effective_config"] == {"chunk_size": 800, "chunk_overlap": 100}
+    assert updated["index_config_source"] == "global"
+
+    patched = env.patch(
+        f"/knowledge-bases/{kb['id']}",
+        json={"chunk_size": 1024, "chunk_overlap": 128},
+    ).json()
+    assert patched["effective_config"] == {"chunk_size": 1024, "chunk_overlap": 128}
+    assert patched["index_config_source"] == "kb"
+
+
+def test_invalid_chunk_config_rejected(env):
+    _configure_models(env)
+    bad = env.post(
+        "/knowledge-bases", json={"name": "Bad", "chunk_size": 900, "chunk_overlap": 64}
+    )
+    assert bad.status_code == 422
+    kb = env.post("/knowledge-bases", json={"name": "Bad2"}).json()
+    overlap_too_large = env.patch(
+        f"/knowledge-bases/{kb['id']}", json={"chunk_size": 512, "chunk_overlap": 512}
+    )
+    assert overlap_too_large.status_code == 422
+
+
+def test_snapshot_and_needs_reindex(env, tmp_path):
+    _configure_models(env)
+    kb = env.post(
+        "/knowledge-bases",
+        json={"name": "Snap", "chunk_size": 512, "chunk_overlap": 64},
+    ).json()
+    folder = tmp_path / "snap"
+    folder.mkdir()
+    (folder / "a.md").write_text("content " * 200, encoding="utf-8")
+    env.post(f"/knowledge-bases/{kb['id']}/folders", json={"folder": str(folder)})
+    assert _wait_ready(env, kb["id"])["status"] == "ready"
+
+    detail = env.get(f"/knowledge-bases/{kb['id']}").json()
+    assert detail["indexed_config"]["chunk_size"] == 512
+    assert detail["indexed_config"]["chunk_overlap"] == 64
+    assert detail["needs_reindex"] is False
+
+    env.patch(
+        f"/knowledge-bases/{kb['id']}", json={"chunk_size": 1024, "chunk_overlap": 128}
+    )
+    changed = env.get(f"/knowledge-bases/{kb['id']}").json()
+    assert changed["needs_reindex"] is True
+
+
+def test_larger_chunk_size_yields_fewer_chunks(env, tmp_path):
+    _configure_models(env)
+    text = "海运全流程包括订舱、装箱、报关、装船、签发提单。" * 60
+    counts: dict[int, int] = {}
+    for size, overlap in ((512, 64), (1536, 200)):
+        kb = env.post(
+            "/knowledge-bases",
+            json={"name": f"CS{size}", "chunk_size": size, "chunk_overlap": overlap},
+        ).json()
+        folder = tmp_path / f"c{size}"
+        folder.mkdir()
+        (folder / "doc.md").write_text(text, encoding="utf-8")
+        env.post(f"/knowledge-bases/{kb['id']}/folders", json={"folder": str(folder)})
+        assert _wait_ready(env, kb["id"])["status"] == "ready"
+        counts[size] = env.get(f"/knowledge-bases/{kb['id']}").json()["chunk_count"]
+    assert counts[512] > counts[1536]

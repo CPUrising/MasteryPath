@@ -8,8 +8,9 @@ from typing import Any, Callable
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from masterypath.agents.llm import DeepSeekClient
+from masterypath.agents.llm import LLMError
 from masterypath.agents.loop import AgentLoop
+from masterypath.agents.model_resolution import build_client, resolve_llm_config
 from masterypath.agents.task_model import TaskModel
 from masterypath.api.chat_routes import register_chat_routes
 from masterypath.api.knowledge_routes import register_knowledge_routes
@@ -20,6 +21,7 @@ from masterypath.chat.store import ChatStore
 from masterypath.knowledge.service import KnowledgeService
 from masterypath.knowledge.store import KnowledgeStore
 from masterypath.learning.outline import OutlineError
+from masterypath.learning.models import TopicSource
 from masterypath.learning.service import LearningService
 from masterypath.learning.storage import LearningStore, PreconditionError
 from masterypath.knowledge.loader import scan_folder
@@ -79,8 +81,18 @@ def create_app(
     app.state.knowledge_service = knowledge_service
     app.state.chat_service = chat_service
     app.state.session_modes: dict[str, str] = {}
-    app.state.client_factory = client_factory or (lambda: DeepSeekClient())
-    task_model = TaskModel(client_factory=app.state.client_factory)
+
+    def _build_llm_client(selection: Any = None, session_key: str = "") -> Any:
+        """Resolve the model from settings (+ optional session selection)."""
+        config = resolve_llm_config(settings, selection)
+        config["session_key"] = session_key
+        return build_client(config)
+
+    if client_factory is not None:
+        app.state.client_builder = lambda selection=None, session_key="": client_factory()
+    else:
+        app.state.client_builder = _build_llm_client
+    task_model = TaskModel(client_factory=lambda: app.state.client_builder())
 
     def _session_mode(session_id: str) -> Any:
         session = store.get_session(session_id) if session_id else None
@@ -244,6 +256,35 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown path")
         return state["sources"]
 
+    @app.put("/learning/paths/{path_id}/knowledge-bases")
+    def set_path_knowledge_bases(
+        path_id: str, payload: dict[str, Any] = Body(...)
+    ) -> dict:
+        """Set the path's default knowledge bases as ``knowledge_base`` sources."""
+        kb_ids = payload.get("kb_ids")
+        if not isinstance(kb_ids, list):
+            raise HTTPException(status_code=422, detail="kb_ids must be an array")
+        sources = []
+        for position, kb_id in enumerate(kb_ids):
+            try:
+                kb = knowledge_service.get(str(kb_id))
+            except Exception:
+                raise HTTPException(status_code=404, detail=f"unknown knowledge base: {kb_id}")
+            sources.append(
+                TopicSource(
+                    id=f"kb:{kb['id']}",
+                    kind="knowledge_base",
+                    source_id=kb["id"],
+                    label=kb["name"],
+                    excerpt=str(kb.get("description") or ""),
+                    position=position,
+                    available=kb.get("status") == "ready",
+                )
+            )
+        service.set_knowledge_base_sources(path_id, sources)
+        state = service.get_state(path_id)
+        return {"knowledge_bases": state.get("knowledge_bases", []), "sources": state["sources"]}
+
     @app.get("/learning/paths/{path_id}/review-queue")
     def review_queue(path_id: str) -> list:
         return service.get_state(path_id)["due_reviews"]
@@ -404,6 +445,31 @@ def create_app(
         service.set_session_mode(path_id, session_id, requested)
         return {"session_id": session_id, "mode": requested, "actor": payload.get("actor", "learner")}
 
+    @app.patch("/learning/paths/{path_id}/sessions/{session_id}")
+    def patch_session(
+        path_id: str, session_id: str, payload: dict[str, Any] = Body(...)
+    ) -> dict:
+        """Persist per-session preferences (model selection, knowledge bases)."""
+        preferences = payload.get("preferences")
+        if not isinstance(preferences, dict):
+            preferences = {
+                key: payload[key]
+                for key in ("llm_selection", "knowledge_bases")
+                if key in payload
+            }
+        if store.get_session(session_id) is None:
+            store.upsert_session(
+                {
+                    "session_id": session_id,
+                    "path_id": path_id,
+                    "mode": mode_policy.normalize_mode(payload.get("mode")),
+                }
+            )
+        updated = store.set_session_preferences(session_id, preferences)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="unknown session")
+        return updated
+
     # -- study via REST (no WS / no LLM needed) ---------------------------
     def _run_tool(tool_name: str, path_id: str, payload: dict[str, Any]) -> dict:
         session_id = str(payload.get("session_id") or "")
@@ -448,11 +514,30 @@ def create_app(
         )
         loop = AgentLoop(TOOLS)
         message = str(request.get("message") or "")
-        events_out = loop.run(
-            app.state.client_factory(),
-            [{"role": "user", "content": message}],
-            ctx,
-        )
+        stored = store.get_session(session_id) if session_id else None
+        selection = request.get("llm_selection")
+        if not selection and stored:
+            selection = (stored.get("preferences") or {}).get("llm_selection")
+        try:
+            client = app.state.client_builder(selection, session_id)
+            events_out = loop.run(
+                client,
+                [{"role": "user", "content": message}],
+                ctx,
+            )
+        except LLMError as exc:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "data": {
+                        "error_code": exc.code,
+                        "message": str(exc),
+                        "retryable": exc.retryable,
+                    },
+                }
+            )
+            await websocket.close()
+            return
         for event in events_out:
             await websocket.send_json({"type": event.type, "data": event.data})
 

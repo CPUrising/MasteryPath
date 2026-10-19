@@ -474,6 +474,152 @@ class MasteryNoteGapTool:
         return ToolResult(ok=True, content="Recorded a coverage gap.", metadata=result)
 
 
+# JSON Schema for every mastery tool. Hand-written on purpose: the executors use
+# ``params.get(...)`` so their signatures are not a reliable source, and an
+# explicit schema is directly assertable in tests. ``strict`` is deliberately
+# omitted — not every OpenAI-compatible provider supports it.
+TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
+    "mastery_build": {
+        "type": "object",
+        "properties": {
+            "modules": {
+                "type": "array",
+                "description": "Outline modules with knowledge_points.",
+                "items": {"type": "object"},
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": "Required to rebuild a non-empty outline.",
+            },
+        },
+        "required": [],
+    },
+    "mastery_revise": {
+        "type": "object",
+        "properties": {
+            "ops": {
+                "type": "array",
+                "description": "Differential outline operations.",
+                "items": {"type": "object"},
+            }
+        },
+        "required": ["ops"],
+    },
+    "mastery_quiz": {
+        "type": "object",
+        "properties": {
+            "knowledge_point_id": {"type": "string"},
+            "question": {"type": "string"},
+            "expected_answer": {"type": "string"},
+            "question_type": {
+                "type": "string",
+                "enum": list(_QUESTION_TYPES),
+            },
+            "options": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "body": {"type": "string"},
+                    },
+                    "required": ["label", "body"],
+                },
+            },
+            "explanation": {"type": "string"},
+            "difficulty": {"type": "string", "enum": list(_DIFFICULTIES)},
+            "accepted_answers": {"type": "array", "items": {"type": "string"}},
+            "required_keywords": {"type": "array", "items": {"type": "string"}},
+            "optional_keywords": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["knowledge_point_id", "question", "expected_answer"],
+    },
+    "mastery_grade": {
+        "type": "object",
+        "properties": {
+            "question_id": {"type": "string"},
+            "answer": {"type": "string"},
+            "hints_used": {"type": "integer", "minimum": 0},
+        },
+        "required": ["question_id", "answer"],
+    },
+    "mastery_skip_question": {
+        "type": "object",
+        "properties": {"question_id": {"type": "string"}},
+        "required": ["question_id"],
+    },
+    "mastery_note_explained": {
+        "type": "object",
+        "properties": {
+            "knowledge_point_id": {"type": "string"},
+            "summary": {"type": "string"},
+        },
+        "required": ["knowledge_point_id", "summary"],
+    },
+    "mastery_defer_objective": {
+        "type": "object",
+        "properties": {
+            "knowledge_point_id": {"type": "string"},
+            "note": {"type": "string"},
+        },
+        "required": ["knowledge_point_id"],
+    },
+    "mastery_assess": {
+        "type": "object",
+        "properties": {
+            "knowledge_point_id": {"type": "string"},
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "quality": {"type": "number"},
+        },
+        "required": ["knowledge_point_id", "passed"],
+    },
+    "mastery_propose_objective": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "type": {
+                "type": "string",
+                "enum": [item.value for item in KnowledgeType],
+            },
+            "reason": {"type": "string"},
+            "module_id": {"type": "string"},
+            "sources": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name"],
+    },
+    "mastery_note_gap": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["goal_gap", "source_omission"]},
+            "ref": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        "required": ["kind"],
+    },
+}
+
+
+def tool_definitions(tools: dict[str, Any]) -> list[dict[str, Any]]:
+    """OpenAI tool definitions for the mounted mastery tools."""
+    definitions: list[dict[str, Any]] = []
+    for name in sorted(tools):
+        tool = tools[name]
+        definitions.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": getattr(tool, "description", "") or name,
+                    "parameters": TOOL_PARAMETERS.get(
+                        name, {"type": "object", "properties": {}}
+                    ),
+                },
+            }
+        )
+    return definitions
+
+
 # Tools mounted on every mastery turn (M2 + M3 + M4 + capture set).
 TOOLS = {
     MasteryBuildTool.name: MasteryBuildTool(),
@@ -491,6 +637,7 @@ TOOLS = {
 
 __all__ = [
     "TOOLS",
+    "TOOL_PARAMETERS",
     "MasteryAssessTool",
     "MasteryBuildTool",
     "MasteryDeferObjectiveTool",
@@ -503,4 +650,5 @@ __all__ = [
     "MasterySkipQuestionTool",
     "ToolContext",
     "ToolResult",
+    "tool_definitions",
 ]

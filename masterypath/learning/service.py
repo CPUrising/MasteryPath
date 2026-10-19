@@ -90,6 +90,24 @@ class LearningService:
 
         return self.store.mutate(path_id, fn, create_if_missing=True)
 
+    def set_knowledge_base_sources(
+        self, path_id: str, sources: list[TopicSource]
+    ) -> list[dict[str, Any]]:
+        """Replace only ``knowledge_base`` sources, preserving every other kind.
+
+        Unlike :meth:`attach_sources` (which replaces the whole list), this lets
+        the UI add or remove knowledge bases without clobbering file/book
+        sources attached by other means.
+        """
+
+        def fn(tx):
+            others = [item for item in tx.progress.sources if item.kind != "knowledge_base"]
+            tx.progress.sources = others + list(sources)
+            tx.emit("sources.knowledge_bases", {"count": len(sources)})
+            return [item.model_dump() for item in tx.progress.sources]
+
+        return self.store.mutate(path_id, fn, create_if_missing=True)
+
     def get_state(self, path_id: str) -> dict[str, Any]:
         progress = self.store.load(path_id)
         if progress is None:
@@ -129,6 +147,15 @@ class LearningService:
             "counts": counts,
             "next": step.to_dict(),
             "sources": [source.model_dump() for source in progress.sources],
+            "knowledge_bases": [
+                {
+                    "id": source.source_id or source.id,
+                    "name": source.label,
+                    "ready": source.available,
+                }
+                for source in progress.sources
+                if source.kind == "knowledge_base"
+            ],
             "gaps": [gap.model_dump() for gap in progress.source_gaps],
             "proposals": [proposal.model_dump() for proposal in progress.proposals],
             "coverage": progress.coverage.model_dump() if progress.coverage else None,

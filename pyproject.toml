@@ -7,7 +7,7 @@ name = "masterypath"
 version = "0.1.0"
 description = "MasteryPath core (M1: domain model, SQLite+CAS storage, policy, mode gating)"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.0", "httpx>=0.27"]
+dependencies = ["pydantic>=2.0", "httpx>=0.27", "python-multipart>=0.0.9"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.24"]

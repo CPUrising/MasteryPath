@@ -51,10 +51,16 @@ def iso(timestamp: float | None) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone().isoformat()
 
 
-def _iter_source_files(root: Path) -> list[Path]:
+def _walk(root: Path) -> tuple[list[Path], int]:
+    """Return ``(kept, skipped)`` text files under *root*.
+
+    ``skipped`` counts files dropped by the ignore rules (hidden names, common
+    build dirs) so the UI can explain an otherwise empty result.
+    """
+    kept: list[Path] = []
+    skipped = 0
     if not root.exists() or not root.is_dir():
-        return []
-    files: list[Path] = []
+        return kept, skipped
     for candidate in sorted(root.rglob("*")):
         if not candidate.is_file():
             continue
@@ -63,11 +69,42 @@ def _iter_source_files(root: Path) -> list[Path]:
         except ValueError:
             continue
         if any(part.startswith(".") or part in _SKIP_DIRS for part in rel_parts):
+            skipped += 1
             continue
         if candidate.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        files.append(candidate)
-    return files
+        kept.append(candidate)
+    return kept, skipped
+
+
+def _iter_source_files(root: Path) -> list[Path]:
+    return _walk(root)[0]
+
+
+def _safe_join(root: Path, rel: str) -> Path:
+    """Resolve an uploaded relative path under *root*, rejecting traversal."""
+    text = (rel or "").replace("\\", "/").strip()
+    if not text or text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        raise KnowledgeError("Invalid file path.")
+    parts: list[str] = []
+    for raw in text.split("/"):
+        if raw in ("", "."):
+            continue
+        if raw == "..":
+            raise KnowledgeError("Invalid file path.")
+        cleaned = _BAD_NAME.sub("", raw).strip().strip(".")
+        if not cleaned:
+            raise KnowledgeError("Invalid file path.")
+        parts.append(cleaned[:128])
+    if not parts:
+        raise KnowledgeError("Invalid file path.")
+    root_res = root.resolve()
+    target = (root_res / Path(*parts)).resolve()
+    if root_res not in target.parents:
+        raise KnowledgeError("Invalid file path.")
+    if target.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        raise KnowledgeError(f"Unsupported file type: {target.suffix or 'unknown'}")
+    return target
 
 
 class KnowledgeStore:
@@ -115,11 +152,12 @@ class KnowledgeStore:
 
     def _present(self, meta: dict[str, Any]) -> dict[str, Any]:
         kb_id = str(meta.get("id") or "")
-        try:
-            raw = self.raw_dir(kb_id)
-            meta["doc_count"] = len(_iter_source_files(raw))
-        except (KnowledgeError, OSError):
-            meta["doc_count"] = 0
+        stats = self.scan_stats(meta)
+        meta["doc_count"] = stats["documents"]
+        meta["skipped_count"] = stats["skipped"]
+        meta["chunk_count"] = int(meta.get("chunk_count") or 0)
+        meta.setdefault("index_config", {})
+        meta.setdefault("indexed_config", {})
         meta.setdefault("status", "empty")
         meta.setdefault("linked_folders", [])
         meta.setdefault("rag_provider", "llamaindex")
@@ -128,6 +166,23 @@ class KnowledgeStore:
         meta["updated_at_iso"] = iso(meta.get("updated_at"))
         meta["last_indexed_at_iso"] = iso(meta.get("last_indexed_at"))
         return meta
+
+    def scan_stats(self, meta: dict[str, Any]) -> dict[str, int]:
+        """Count readable and ignored files across ``raw/`` and linked folders."""
+        kb_id = str(meta.get("id") or "")
+        if not _SAFE_ID.match(kb_id):
+            return {"documents": 0, "skipped": 0}
+        documents = 0
+        skipped = 0
+        kept, dropped = _walk(self.raw_dir(kb_id))
+        documents += len(kept)
+        skipped += dropped
+        for folder in meta.get("linked_folders", []) or []:
+            root = Path(str(folder.get("path") or ""))
+            kept, dropped = _walk(root)
+            documents += len(kept)
+            skipped += dropped
+        return {"documents": documents, "skipped": skipped}
 
     def list(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -150,6 +205,7 @@ class KnowledgeStore:
         mode: str = "import",
         embedding_model: dict[str, Any] | None = None,
         description: str = "",
+        index_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         display = (name or "").strip()
         if not display:
@@ -172,6 +228,8 @@ class KnowledgeStore:
             "rag_provider": "llamaindex",
             "search_mode": "vector",
             "embedding_model": embedding_model or {},
+            "index_config": index_config or {},
+            "indexed_config": {},
             "status": "empty",
             "error": "",
             "created_at": now,
@@ -184,7 +242,7 @@ class KnowledgeStore:
 
     def update(self, kb_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         meta = self._load(kb_id)
-        allowed = {"name", "description", "embedding_model", "status", "error"}
+        allowed = {"name", "description", "embedding_model", "status", "error", "index_config"}
         for key, value in fields.items():
             if key in allowed:
                 meta[key] = value
@@ -206,6 +264,8 @@ class KnowledgeStore:
         error: str = "",
         last_indexed_at: float | None = None,
         embedding_model: dict[str, Any] | None = None,
+        chunk_count: int | None = None,
+        indexed_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         meta = self._load(kb_id)
         meta["status"] = status
@@ -214,12 +274,19 @@ class KnowledgeStore:
             meta["last_indexed_at"] = last_indexed_at
         if embedding_model is not None:
             meta["embedding_model"] = embedding_model
+        if indexed_config is not None:
+            meta["indexed_config"] = indexed_config
+        if chunk_count is not None:
+            meta["chunk_count"] = int(chunk_count)
+        elif status != "ready":
+            meta["chunk_count"] = 0
         return self._present(self._save(kb_id, meta))
 
     # -- files & folders ---------------------------------------------------
     def files(self, kb_id: str) -> list[dict[str, Any]]:
+        meta = self._load(kb_id)
         root = self.raw_dir(kb_id)
-        rows = []
+        rows: list[dict[str, Any]] = []
         for path in _iter_source_files(root):
             stat = path.stat()
             rows.append(
@@ -227,9 +294,52 @@ class KnowledgeStore:
                     "path": path.relative_to(root).as_posix(),
                     "size": stat.st_size,
                     "modified_at": iso(stat.st_mtime),
+                    "linked": False,
                 }
             )
+        for folder in meta.get("linked_folders", []) or []:
+            base = Path(str(folder.get("path") or ""))
+            prefix = base.name or "linked"
+            for path in _iter_source_files(base):
+                stat = path.stat()
+                rows.append(
+                    {
+                        "path": f"{prefix}/{path.relative_to(base).as_posix()}",
+                        "size": stat.st_size,
+                        "modified_at": iso(stat.st_mtime),
+                        "linked": True,
+                        "folder_id": folder.get("id"),
+                    }
+                )
         return rows
+
+    def write_uploads(
+        self,
+        kb_id: str,
+        uploads: list[tuple[str, bytes]],
+        *,
+        conflict: str = "overwrite",
+    ) -> int:
+        """Write uploaded ``(relative_path, data)`` pairs under ``raw/``."""
+        root = self.raw_dir(kb_id)
+        root.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for rel, data in uploads:
+            target = _safe_join(root, rel)
+            if target.exists() and conflict == "skip":
+                continue
+            if target.exists() and conflict == "rename":
+                stem, suffix = target.stem, target.suffix
+                counter = 1
+                while target.exists():
+                    target = target.with_name(f"{stem}-{counter}{suffix}")
+                    counter += 1
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written += 1
+        if written:
+            self._save(kb_id, self._load(kb_id))
+        return written
 
     def remove_file(self, kb_id: str, rel_path: str) -> None:
         root = self.raw_dir(kb_id).resolve()

@@ -16,7 +16,12 @@ export const chatApi = {
     }).then(json<ChatSessionSummary>),
   get: (sessionId: string) =>
     fetch(`${API_BASE}/chat/sessions/${sessionId}`).then(json<ChatSessionDetail>),
-  update: (sessionId: string, body: Partial<Pick<ChatSessionSummary, "title" | "model_id" | "kb_ids">>) =>
+  update: (
+    sessionId: string,
+    body: Partial<Pick<ChatSessionSummary, "title" | "model_id" | "kb_ids">> & {
+      preferences?: { llm_selection?: { provider_id: string; model_id: string }; knowledge_bases?: string[] };
+    },
+  ) =>
     fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },

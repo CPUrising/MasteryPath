@@ -9,11 +9,16 @@ the next tool call without re-mounting schemas.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
 from masterypath.agents.llm import LLMClient
 from masterypath.capabilities.mastery import behavior, mode
-from masterypath.capabilities.mastery.tools import ToolContext, ToolResult
+from masterypath.capabilities.mastery.tools import (
+    ToolContext,
+    ToolResult,
+    tool_definitions,
+)
 
 
 @dataclass
@@ -53,18 +58,37 @@ class AgentLoop:
         events: list[StreamEvent] = []
         prompt = system_prompt or _system_prompt(ctx.session_mode)
         history: list[dict[str, Any]] = [{"role": "system", "content": prompt}, *messages]
-        tool_names = sorted(self.tools)
+        tool_defs = tool_definitions(self.tools)
         ended = {"value": False}
         ctx.end_turn = lambda: ended.__setitem__("value", True)
         tool_calls = 0
 
         for _ in range(self.max_rounds):
-            response = client.chat(history, tool_names)
+            response = client.chat(history, tool_defs)
             if response.text:
                 events.append(StreamEvent("text_delta", {"text": response.text}))
             if not response.tool_calls:
                 events.append(StreamEvent("turn_end", {"reason": "done"}))
                 return events
+            # OpenAI requires the assistant turn that requested the calls to be
+            # present before its tool results.
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": response.text or None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": json.dumps(call.arguments),
+                            },
+                        }
+                        for call in response.tool_calls
+                    ],
+                }
+            )
             for call in response.tool_calls:
                 tool_calls += 1
                 if tool_calls > behavior.MAX_TOOL_CALLS_PER_TURN:
@@ -77,11 +101,16 @@ class AgentLoop:
                         {"name": call.name, "arguments": call.arguments},
                     )
                 )
-                tool = self.tools.get(call.name)
-                if tool is None:
-                    result = ToolResult(ok=False, content=f"unknown tool: {call.name}")
+                if call.parse_error:
+                    # The provider sent malformed arguments: answer with a failed
+                    # result so the model can correct itself instead of crashing.
+                    result = ToolResult(ok=False, content="invalid tool arguments")
                 else:
-                    result = tool.execute(call.arguments, ctx)
+                    tool = self.tools.get(call.name)
+                    if tool is None:
+                        result = ToolResult(ok=False, content=f"unknown tool: {call.name}")
+                    else:
+                        result = tool.execute(call.arguments, ctx)
                 events.append(
                     StreamEvent(
                         "tool_result",
@@ -96,7 +125,7 @@ class AgentLoop:
                 history.append(
                     {
                         "role": "tool",
-                        "name": call.name,
+                        "tool_call_id": call.id,
                         "content": result.content,
                     }
                 )

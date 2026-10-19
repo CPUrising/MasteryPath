@@ -15,7 +15,7 @@ import { StudyOutline } from "@/components/learning/StudyOutline";
 import { api } from "@/lib/api";
 import { masteryTopicRoute } from "@/lib/learning-routes";
 import { MODE_NOTES, normalizeMode } from "@/lib/mastery-mode";
-import type { Mode, PathState } from "@/lib/types";
+import type { LLMSelection, Mode, ModelEntry, ModelSection, PathState } from "@/lib/types";
 import { runTurn } from "@/lib/ws";
 
 interface Item {
@@ -45,6 +45,47 @@ function StudyRoute() {
   const [busy, setBusy] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(true);
   const [celebration, setCelebration] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [selection, setSelection] = useState<LLMSelection | null>(null);
+
+  useEffect(() => {
+    api
+      .getSettings("llm")
+      .then((value) => {
+        const section = value as ModelSection;
+        setModels(section.models ?? []);
+        setSelection((current) => {
+          if (current) return current;
+          const active = section.models?.find((model) => model.id === section.active_id) ??
+            section.models?.[0];
+          return active ? { provider_id: active.provider_id, model_id: active.id } : null;
+        });
+      })
+      .catch(() => setModels([]));
+    api
+      .getSession(sessionId)
+      .then((detail) => {
+        const stored = (detail.session as unknown as {
+          preferences?: { llm_selection?: LLMSelection };
+        })?.preferences?.llm_selection;
+        if (stored?.model_id) setSelection(stored);
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  const changeModel = useCallback(
+    (modelId: string) => {
+      const model = models.find((item) => item.id === modelId);
+      if (!model) return;
+      const next = { provider_id: model.provider_id, model_id: model.id };
+      setSelection(next);
+      void api
+        .patchSession(pathId, sessionId, { preferences: { llm_selection: next } })
+        .catch(() => undefined);
+    },
+    [models, pathId, sessionId],
+  );
 
   const load = useCallback(async () => {
     const next = await api.getState(pathId);
@@ -90,9 +131,19 @@ function StudyRoute() {
       setItems((previous) => [...previous, { role: "user", text }]);
       let assistant = "";
       try {
-        await runTurn({ session_id: sessionId, path_id: pathId, mode, message: text }, (event) => {
-          if (event.type === "text_delta") assistant += String(event.data.text ?? "");
-        });
+        await runTurn(
+          {
+            session_id: sessionId,
+            path_id: pathId,
+            mode,
+            message: text,
+            llm_selection: selection ?? undefined,
+          },
+          (event) => {
+            if (event.type === "text_delta") assistant += String(event.data.text ?? "");
+            if (event.type === "error") assistant = String(event.data.message ?? "");
+          },
+        );
       } catch (reason) {
         assistant = `${t("study.noProvider")} (${String(reason)})`;
       }
@@ -100,7 +151,7 @@ function StudyRoute() {
       await load().catch(() => undefined);
       setBusy(false);
     },
-    [pathId, sessionId, mode, load, t],
+    [pathId, sessionId, mode, load, t, selection],
   );
 
   if (!state) {
@@ -122,6 +173,20 @@ function StudyRoute() {
           <div className="truncate text-[12px] text-muted-foreground">{next.knowledge_point_name}</div>
         </div>
         <ModeSwitch mode={mode} onSelect={changeMode} disabled={busy} />
+        <select
+          aria-label={t("chat.model")}
+          value={selection?.model_id ?? ""}
+          disabled={busy || models.length === 0}
+          onChange={(event) => changeModel(event.target.value)}
+          className="h-7 max-w-[190px] rounded-md border border-border bg-background px-1.5 text-[12px]"
+        >
+          {models.length === 0 && <option value="">{t("chat.noModel")}</option>}
+          {models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name || model.model}
+            </option>
+          ))}
+        </select>
         <div className="flex items-center gap-1.5 pl-2">
           <ProgressRing value={progress} size={18} stroke={2} showLabel={false} />
           <span className="text-[12px] tabular-nums text-muted-foreground">

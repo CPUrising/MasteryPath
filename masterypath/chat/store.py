@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title       TEXT NOT NULL DEFAULT '',
     model_id    TEXT NOT NULL DEFAULT '',
     kb_ids      TEXT NOT NULL DEFAULT '[]',
+    preferences TEXT NOT NULL DEFAULT '{}',
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL
 );
@@ -36,11 +37,19 @@ class UnknownSession(KeyError):
 
 
 def _session_row(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
+    preferences: dict[str, Any] = {}
+    if "preferences" in keys:
+        try:
+            preferences = json.loads(row["preferences"] or "{}")
+        except (ValueError, TypeError):
+            preferences = {}
     return {
         "session_id": row["session_id"],
         "title": row["title"],
         "model_id": row["model_id"],
         "kb_ids": json.loads(row["kb_ids"] or "[]"),
+        "preferences": preferences if isinstance(preferences, dict) else {},
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -68,7 +77,18 @@ class ChatStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "preferences" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -102,14 +122,23 @@ class ChatStore:
         title: str = "",
         model_id: str = "",
         kb_ids: list[str] | None = None,
+        preferences: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session_id = f"c{uuid.uuid4().hex[:12]}"
         now = time.time()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sessions(session_id,title,model_id,kb_ids,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?)",
-                (session_id, title, model_id, json.dumps(kb_ids or []), now, now),
+                "INSERT INTO sessions(session_id,title,model_id,kb_ids,preferences,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (
+                    session_id,
+                    title,
+                    model_id,
+                    json.dumps(kb_ids or []),
+                    json.dumps(preferences or {}),
+                    now,
+                    now,
+                ),
             )
             self._conn.commit()
         return self.get_session(session_id)
@@ -130,11 +159,26 @@ class ChatStore:
         kb_ids = fields.get("kb_ids", session["kb_ids"])
         if not isinstance(kb_ids, list):
             kb_ids = session["kb_ids"]
+        preferences = dict(session.get("preferences") or {})
+        incoming = fields.get("preferences")
+        if isinstance(incoming, dict):
+            preferences.update(incoming)
+        # Keep the legacy model_id column in step with the new source of truth.
+        selection = preferences.get("llm_selection")
+        if isinstance(selection, dict) and selection.get("model_id"):
+            model_id = str(selection["model_id"])
         with self._lock:
             self._conn.execute(
-                "UPDATE sessions SET title=?,model_id=?,kb_ids=?,updated_at=? "
+                "UPDATE sessions SET title=?,model_id=?,kb_ids=?,preferences=?,updated_at=? "
                 "WHERE session_id=?",
-                (title, model_id, json.dumps(kb_ids), time.time(), session_id),
+                (
+                    title,
+                    model_id,
+                    json.dumps(kb_ids),
+                    json.dumps(preferences, ensure_ascii=False),
+                    time.time(),
+                    session_id,
+                ),
             )
             self._conn.commit()
         return self.get_session(session_id)

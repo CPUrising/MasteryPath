@@ -94,6 +94,17 @@ export const api = {
     ),
   attachSources: (pathId: string, folder: string) =>
     post<unknown[]>(`${API_BASE}/learning/paths/${pathId}/sources`, { folder }),
+  setPathKnowledgeBases: (pathId: string, kbIds: string[]) =>
+    put<{ knowledge_bases: { id: string; name: string; ready: boolean }[] }>(
+      `${API_BASE}/learning/paths/${pathId}/knowledge-bases`,
+      { kb_ids: kbIds },
+    ),
+  patchSession: (pathId: string, sessionId: string, body: unknown) =>
+    fetch(`${API_BASE}/learning/paths/${pathId}/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(json<unknown>),
   suggestQuestion: (pathId: string) =>
     fetch(`${API_BASE}/learning/paths/${pathId}/suggest-question`).then(
       json<{ suggestion: string }>,

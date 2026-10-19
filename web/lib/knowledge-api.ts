@@ -1,5 +1,10 @@
 import { API_BASE } from "./api";
-import type { KnowledgeBase, KnowledgeFile, LinkedFolder } from "./types";
+import type {
+  KnowledgeBase,
+  KnowledgeFile,
+  KnowledgeProgress,
+  LinkedFolder,
+} from "./types";
 
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
@@ -20,8 +25,10 @@ export const knowledgeApi = {
     mode?: "import" | "link";
     embedding_model_id?: string;
     description?: string;
+    chunk_size?: number;
+    chunk_overlap?: number;
   }) => fetch(`${API_BASE}/knowledge-bases`, body(payload)).then(json<KnowledgeBase>),
-  update: (id: string, payload: { name?: string; description?: string }) =>
+  update: (id: string, payload: { name?: string; description?: string; chunk_size?: number; chunk_overlap?: number }) =>
     fetch(`${API_BASE}/knowledge-bases/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -42,7 +49,21 @@ export const knowledgeApi = {
       method: "DELETE",
     }).then(json<KnowledgeBase>),
   reindex: (id: string) =>
-    fetch(`${API_BASE}/knowledge-bases/${id}/reindex`, body({})).then(json<KnowledgeBase>),
+    fetch(`${API_BASE}/knowledge-bases/${id}/reindex`, body({})).then(
+      json<{ status: string; total_files?: number; run_id?: string }>,
+    ),
+  progress: (id: string) =>
+    fetch(`${API_BASE}/knowledge-bases/${id}/progress`).then(json<KnowledgeProgress>),
+  upload: (id: string, files: File[], paths: string[], conflict = "overwrite") => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file, file.name));
+    form.append("paths", JSON.stringify(paths));
+    form.append("conflict", conflict);
+    return fetch(`${API_BASE}/knowledge-bases/${id}/upload`, {
+      method: "POST",
+      body: form,
+    }).then(json<{ uploaded: number; status: string; total_files?: number; run_id?: string }>);
+  },
 };
 
-export type { KnowledgeBase, KnowledgeFile, LinkedFolder };
+export type { KnowledgeBase, KnowledgeFile, KnowledgeProgress, LinkedFolder };

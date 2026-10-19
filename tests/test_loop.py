@@ -32,6 +32,7 @@ def _build_call():
                 }
             ]
         },
+        id="call-build",
     )
 
 
@@ -75,3 +76,35 @@ def test_loop_stops_at_max_rounds(ctx):
     client = FakeLLMClient([looping, looping, looping, looping, looping, looping, looping])
     events = AgentLoop(TOOLS, max_rounds=2).run(client, [{"role": "user", "content": "x"}], ctx)
     assert events[-1].data["reason"] == "max_rounds"
+
+
+def test_loop_sends_tool_definitions(ctx):
+    client = FakeLLMClient([LLMResponse(text="hello")])
+    AgentLoop(TOOLS).run(client, [{"role": "user", "content": "x"}], ctx)
+    definitions = client.tools_seen[0]
+    names = {item["function"]["name"] for item in definitions}
+    assert names == set(TOOLS)
+    assert all("parameters" in item["function"] for item in definitions)
+
+
+def test_loop_writes_openai_tool_history(ctx):
+    client = FakeLLMClient(
+        [LLMResponse(tool_calls=[_build_call()]), LLMResponse(text="done")]
+    )
+    AgentLoop(TOOLS).run(client, [{"role": "user", "content": "x"}], ctx)
+    second_round = client.calls[1]
+    assistant = [m for m in second_round if m["role"] == "assistant" and m.get("tool_calls")]
+    assert assistant, "assistant tool_calls message missing"
+    call_id = assistant[0]["tool_calls"][0]["id"]
+    tool_messages = [m for m in second_round if m["role"] == "tool"]
+    assert tool_messages and tool_messages[0]["tool_call_id"] == call_id
+
+
+def test_loop_degrades_on_bad_arguments(ctx):
+    bad = ToolCall(name="mastery_build", arguments={}, id="c1", parse_error=True)
+    client = FakeLLMClient([LLMResponse(tool_calls=[bad]), LLMResponse(text="ok")])
+    events = AgentLoop(TOOLS).run(client, [{"role": "user", "content": "x"}], ctx)
+    tool_result = next(event for event in events if event.type == "tool_result")
+    assert tool_result.data["ok"] is False
+    assert "invalid tool arguments" in tool_result.data["content"]
+    assert ctx.service.get_state("p")["status"] == "missing"

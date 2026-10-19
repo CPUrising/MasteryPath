@@ -1,5 +1,5 @@
 import { WS_BASE } from "./api";
-import type { Mode, TurnEvent } from "./types";
+import type { LLMSelection, Mode, TurnEvent } from "./types";
 
 export interface TurnRequest {
   session_id: string;
@@ -7,6 +7,7 @@ export interface TurnRequest {
   mode: Mode;
   message: string;
   turn_id?: string;
+  llm_selection?: LLMSelection;
 }
 
 /** Run one tutor turn over the WebSocket and stream events back. */

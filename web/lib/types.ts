@@ -80,6 +80,7 @@ export interface PathState {
   counts: { mastered: number; learning: number; new: number; total: number };
   next: NextStep;
   sources: Source[];
+  knowledge_bases: { id: string; name: string; ready: boolean }[];
   gaps: Gap[];
   reviews: ReviewItem[];
   review_settings: { desired_retention: number; scope: string };
@@ -113,6 +114,11 @@ export interface SessionMessage {
 export interface TurnEvent {
   type: string;
   data: Record<string, unknown>;
+}
+
+export interface LLMSelection {
+  provider_id: string;
+  model_id: string;
 }
 
 export interface Provider {
@@ -183,6 +189,12 @@ export interface LinkedFolder {
   last_sync?: number | null;
 }
 
+export interface IndexConfig {
+  chunk_size: number;
+  chunk_overlap: number;
+  tokenizer?: string;
+}
+
 export interface KnowledgeBase {
   id: string;
   name: string;
@@ -201,13 +213,35 @@ export interface KnowledgeBase {
   last_indexed_at_iso: string;
   disk_path: string;
   doc_count: number;
+  chunk_count: number;
+  skipped_count: number;
   linked_folders: LinkedFolder[];
+  index_config: Partial<IndexConfig>;
+  indexed_config: Partial<IndexConfig>;
+  effective_config: IndexConfig;
+  index_config_source: "kb" | "global";
+  needs_reindex: boolean;
 }
 
 export interface KnowledgeFile {
   path: string;
   size: number;
   modified_at: string;
+  linked?: boolean;
+  folder_id?: string;
+}
+
+export interface KnowledgeProgress {
+  run_id: string;
+  status: string;
+  phase: string;
+  indexed_files: number;
+  total_files: number;
+  chunks: number;
+  error: string;
+  started_at: number;
+  updated_at: number;
+  percent: number | null;
 }
 
 export interface ChatSessionSummary {

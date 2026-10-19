@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterator
 
 from masterypath.agents.llm import LLMError, OpenAICompatibleClient
+from masterypath.agents.model_resolution import build_client, resolve_llm_config
 from masterypath.chat.store import ChatStore, UnknownSession
 from masterypath.settings.store import SettingsStore
 
@@ -18,12 +19,7 @@ _SYSTEM = (
 
 
 def _default_client_factory(config: dict[str, Any]) -> OpenAICompatibleClient:
-    return OpenAICompatibleClient(
-        base_url=config["base_url"],
-        api_key=config.get("api_key") or "",
-        model=config["model"],
-        protocol=config.get("protocol") or "openai",
-    )
+    return build_client(config)
 
 
 class ChatService:
@@ -42,43 +38,10 @@ class ChatService:
 
     # -- model resolution --------------------------------------------------
     def resolve_model(self, model_id: str | None = None) -> dict[str, Any]:
-        section = self.settings.section("llm")
-        models = section.get("models") if isinstance(section, dict) else []
-        models = models if isinstance(models, list) else []
-        chosen = None
+        selection = None
         if model_id:
-            chosen = next((m for m in models if m.get("id") == model_id), None)
-        if chosen is None:
-            active = str(section.get("active_id") or "") if isinstance(section, dict) else ""
-            chosen = next((m for m in models if m.get("id") == active), None)
-        if chosen is None and models:
-            chosen = models[0]
-        if not chosen or not str(chosen.get("model") or "").strip():
-            raise LLMError(
-                "No language model is configured. Add one under Settings → Language models."
-            )
-        provider_id = str(chosen.get("provider_id") or "")
-        provider = next(
-            (
-                item
-                for item in self.settings.section("providers")
-                if isinstance(item, dict) and item.get("id") == provider_id
-            ),
-            None,
-        )
-        if provider is None or not str(provider.get("base_url") or "").strip():
-            raise LLMError(
-                "The model's provider is missing a base URL. Check Settings → Providers."
-            )
-        return {
-            "model_id": str(chosen.get("id") or ""),
-            "name": str(chosen.get("name") or chosen.get("model") or ""),
-            "model": str(chosen.get("model") or ""),
-            "provider_id": provider_id,
-            "protocol": str(provider.get("protocol") or "openai"),
-            "base_url": str(provider.get("base_url") or ""),
-            "api_key": provider.get("api_key") or "",
-        }
+            selection = {"model_id": model_id}
+        return resolve_llm_config(self.settings, selection)
 
     # -- sessions ----------------------------------------------------------
     def list_sessions(self) -> list[dict[str, Any]]:
@@ -192,6 +155,7 @@ class ChatService:
 
         try:
             config = self.resolve_model(session.get("model_id") or "")
+            config["session_key"] = session_id
             client = self._client_factory(config)
         except LLMError as exc:
             yield {"type": "error", "message": str(exc)}

@@ -9,7 +9,7 @@ import { settingsRoute } from "@/lib/learning-routes";
 
 const GROUPS: { label: string; keys: string[] }[] = [
   { label: "settings.group.personal", keys: ["general"] },
-  { label: "settings.group.models", keys: ["connections", "llm", "task-models", "embedding"] },
+  { label: "settings.group.models", keys: ["connections", "llm", "task-models", "embedding", "indexing"] },
 ];
 
 const LABELS: Record<string, string> = {
@@ -18,6 +18,7 @@ const LABELS: Record<string, string> = {
   llm: "settings.llm.title",
   "task-models": "settings.task.title",
   embedding: "settings.embedding.title",
+  indexing: "settings.indexing.title",
 };
 
 export function SettingsNav() {

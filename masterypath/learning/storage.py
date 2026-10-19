@@ -142,6 +142,13 @@ ON CONFLICT(entry_id) DO UPDATE SET
 
 
 def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
+    preferences: dict[str, Any] = {}
+    if "preferences" in keys:
+        try:
+            preferences = json.loads(row["preferences"] or "{}")
+        except (ValueError, TypeError):
+            preferences = {}
     return {
         "session_id": row["session_id"],
         "path_id": row["path_id"],
@@ -151,6 +158,7 @@ def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
         "message_count": row["message_count"],
         "last_message": row["last_message"],
         "has_pending_question": bool(row["has_pending_question"]),
+        "preferences": preferences if isinstance(preferences, dict) else {},
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -197,9 +205,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     mode                 TEXT NOT NULL DEFAULT 'study',
     status               TEXT NOT NULL DEFAULT 'active',
     message_count        INTEGER NOT NULL DEFAULT 0,
-    last_message         TEXT NOT NULL DEFAULT '',
-    has_pending_question INTEGER NOT NULL DEFAULT 0,
-    created_at           REAL NOT NULL,
+      last_message         TEXT NOT NULL DEFAULT '',
+      has_pending_question INTEGER NOT NULL DEFAULT 0,
+      preferences          TEXT NOT NULL DEFAULT '{}',
+      created_at           REAL NOT NULL,
     updated_at           REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_path ON sessions(path_id);
@@ -230,7 +239,19 @@ class LearningStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotent additive migrations for databases created by older builds."""
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "preferences" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'"
+            )
 
     # -- reads -------------------------------------------------------------
     def load(self, path_id: str) -> LearningProgress | None:
@@ -489,8 +510,9 @@ class LearningStore:
                 self._conn.execute(
                     """
                     INSERT INTO sessions(session_id, path_id, title, mode, status,
-                        message_count, last_message, has_pending_question, created_at, updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                        message_count, last_message, has_pending_question,
+                        preferences, created_at, updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(session_id) DO UPDATE SET
                         title=excluded.title, mode=excluded.mode, status=excluded.status,
                         message_count=excluded.message_count, last_message=excluded.last_message,
@@ -506,6 +528,7 @@ class LearningStore:
                         int(session.get("message_count", 0)),
                         session.get("last_message", ""),
                         1 if session.get("has_pending_question") else 0,
+                        json.dumps(session.get("preferences") or {}, ensure_ascii=False),
                         session["created_at"],
                         session["updated_at"],
                     ),
@@ -522,6 +545,30 @@ class LearningStore:
                 "SELECT * FROM sessions WHERE session_id=?", (session_id,)
             ).fetchone()
         return _row_to_session(row) if row else None
+
+    def set_session_preferences(
+        self, session_id: str, preferences: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Merge ``preferences`` into a session, leaving other fields untouched."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT preferences FROM sessions WHERE session_id=?", (session_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                current = json.loads(row["preferences"] or "{}")
+            except (ValueError, TypeError):
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            current.update(preferences)
+            self._conn.execute(
+                "UPDATE sessions SET preferences=?, updated_at=? WHERE session_id=?",
+                (json.dumps(current, ensure_ascii=False), time.time(), session_id),
+            )
+            self._conn.commit()
+        return self.get_session(session_id)
 
     def list_sessions(self, path_id: str) -> list[dict[str, Any]]:
         with self._lock:
