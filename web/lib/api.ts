@@ -102,6 +102,10 @@ export const api = {
     fetch(
       `${API_BASE}/learning/paths/${pathId}/questions${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`,
     ).then(json<unknown[]>),
+  allQuestions: (tag?: string) =>
+    fetch(`${API_BASE}/questions${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`).then(
+      json<import("./types").QuestionEntry[]>,
+    ),
   quiz: (pathId: string, body: unknown) =>
     post<{ question_id: string; question_card: unknown }>(`${API_BASE}/learning/paths/${pathId}/quiz`, body),
   grade: (pathId: string, body: unknown) =>

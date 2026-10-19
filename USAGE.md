@@ -9,7 +9,7 @@
 ```powershell
 # 1) 环境
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,rag]"
 
 # 2) 跑测试
 .\.venv\Scripts\python.exe -m pytest -q
@@ -33,16 +33,16 @@ python -m venv .venv
 
 ## 3. 核心概念速查
 
-| 概念 | 说明 |
-| --- | --- |
-| **大纲（地图）** | 唯一真相源：模块 → 知识点（KP）。只有 `outline` 模式能改地图 |
-| **三种模式** | `outline` 改地图 / `study` 讲与考 / `review` 只考已掌握 |
-| **知识点类型** | `memory` `procedure` `concept` `design`；**类型决定"什么叫掌握"** |
-| **掌握门槛** | memory/procedure：量化 `mastery_levels ≥ 0.9`；concept/design：定性通过（费曼式） |
-| **双轨** | 系统评估通过（来源 `system`，写分数）／学习者声明（来源 `learner`，**不写分数**） |
-| **间隔复习** | SM-2；掌握后播种 `RepetitionState`，到期重现 |
-| **缺口** | 目标缺口（来源没有）／来源遗漏（选了没用）；未接地 KP 标 `ungrounded` |
-| **前置** | `prerequisite_ids` 为**硬门控**：前置未掌握则不可评估 |
+| 概念                   | 说明                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| **大纲（地图）** | 唯一真相源：模块 → 知识点（KP）。只有 `outline` 模式能改地图                             |
+| **三种模式**     | `outline` 改地图 / `study` 讲与考 / `review` 只考已掌握                               |
+| **知识点类型**   | `memory` `procedure` `concept` `design`；**类型决定"什么叫掌握"**             |
+| **掌握门槛**     | memory/procedure：量化 `mastery_levels ≥ 0.9`；concept/design：定性通过（费曼式）        |
+| **双轨**         | 系统评估通过（来源 `system`，写分数）／学习者声明（来源 `learner`，**不写分数**） |
+| **间隔复习**     | SM-2；掌握后播种 `RepetitionState`，到期重现                                              |
+| **缺口**         | 目标缺口（来源没有）／来源遗漏（选了没用）；未接地 KP 标 `ungrounded`                     |
+| **前置**         | `prerequisite_ids` 为**硬门控**：前置未掌握则不可评估                               |
 
 ---
 
@@ -128,39 +128,39 @@ events = AgentLoop(TOOLS).run(client, [{"role": "user", "content": "带我学 X"
 
 ## 5. REST 端点
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/learning/paths` | 路径列表 + 概览 |
-| POST | `/learning/paths` | 创建目标 `{path_id, goal, name}` |
-| GET | `/learning/paths/{id}` | 完整状态（map/next/sources/gaps/pending/due） |
-| DELETE | `/learning/paths/{id}` | 删除 |
-| PUT | `/learning/paths/{id}/map?session_id=` | 改地图（`{modules}` 或 `{ops}`）；**须 outline 模式** |
-| POST | `/learning/paths/{id}/rebuild?session_id=` | 重建，`{confirm:true}` |
-| POST | `/learning/paths/{id}/objectives/{kp}/override` | 声明掌握 `{note}` |
-| POST | `/learning/paths/{id}/gaps/{gap}/resolve` | `{action:"accept"|"regenerate"}` |
-| GET | `/learning/paths/{id}/mastery` | 地图摘要 |
-| POST | `/learning/paths/{id}/sources` | 接文件夹 `{folder}` |
-| GET | `/learning/paths/{id}/sources` | 已接来源 |
-| GET | `/learning/paths/{id}/review-queue` | 到期复习 |
-| GET | `/learning/paths/{id}/events?since=` | 事件流（恢复用） |
-| GET | `/learning/paths/{id}/suggest-question` | 建议下一问（草稿） |
-| GET | `/learning/paths/{id}/questions?tag=` | 题库 |
-| POST | `/learning/questions/{entry_id}/tags` | 打标签 `{tags:[...]}` |
-| PUT | `/learning/paths/{id}/sessions/{sid}/mode` | 切模式 `{mode, actor}` |
-| PATCH | `/learning/paths/{id}` | 改名 `{name}` |
-| POST | `/learning/paths/{id}/redo` | 重置进度（保留地图） |
-| PUT | `/learning/paths/{id}/review-settings` | 复习目标 `{desired_retention}` |
-| GET | `/learning/paths/{id}/sessions` | 会话列表 |
-| GET | `/learning/sessions/{sid}` | 会话详情（含消息） |
-| POST | `/learning/paths/{id}/quiz` | 出题（无需 LLM） |
-| POST | `/learning/paths/{id}/grade` | 判分（无需 LLM） |
-| POST | `/learning/paths/{id}/assess` | 定性评估 |
-| POST | `/learning/paths/{id}/skip-question` | 跳过当前题 |
-| GET | `/learning/paths/{id}/proposals` | 候选目标（学习中提议，不改地图） |
-| POST | `/learning/paths/{id}/proposals/{pid}/resolve` | `{action:"accept"\|"reject"}`（accept→成为 KP） |
-| GET | `/learning/paths/{id}/coverage` | 生成质量覆盖报告（`CoverageReport`） |
-| POST | `/learning/paths/{id}/eval` | 确定性质量指标（覆盖/接地/无环） |
-| GET/PUT | `/settings/{section}` | 配置：`providers`/`llm`/`task-models`/`embedding`/`general` |
+| 方法    | 路径                                              | 说明                                                                  |
+| ------- | ------------------------------------------------- | --------------------------------------------------------------------- |
+| GET     | `/learning/paths`                               | 路径列表 + 概览                                                       |
+| POST    | `/learning/paths`                               | 创建目标 `{path_id, goal, name}`                                    |
+| GET     | `/learning/paths/{id}`                          | 完整状态（map/next/sources/gaps/pending/due）                         |
+| DELETE  | `/learning/paths/{id}`                          | 删除                                                                  |
+| PUT     | `/learning/paths/{id}/map?session_id=`          | 改地图（`{modules}` 或 `{ops}`）；**须 outline 模式**       |
+| POST    | `/learning/paths/{id}/rebuild?session_id=`      | 重建，`{confirm:true}`                                              |
+| POST    | `/learning/paths/{id}/objectives/{kp}/override` | 声明掌握 `{note}`                                                   |
+| POST    | `/learning/paths/{id}/gaps/{gap}/resolve`       | `{action:"accept"                                                     |
+| GET     | `/learning/paths/{id}/mastery`                  | 地图摘要                                                              |
+| POST    | `/learning/paths/{id}/sources`                  | 接文件夹 `{folder}`                                                 |
+| GET     | `/learning/paths/{id}/sources`                  | 已接来源                                                              |
+| GET     | `/learning/paths/{id}/review-queue`             | 到期复习                                                              |
+| GET     | `/learning/paths/{id}/events?since=`            | 事件流（恢复用）                                                      |
+| GET     | `/learning/paths/{id}/suggest-question`         | 建议下一问（草稿）                                                    |
+| GET     | `/learning/paths/{id}/questions?tag=`           | 题库                                                                  |
+| POST    | `/learning/questions/{entry_id}/tags`           | 打标签 `{tags:[...]}`                                               |
+| PUT     | `/learning/paths/{id}/sessions/{sid}/mode`      | 切模式 `{mode, actor}`                                              |
+| PATCH   | `/learning/paths/{id}`                          | 改名 `{name}`                                                       |
+| POST    | `/learning/paths/{id}/redo`                     | 重置进度（保留地图）                                                  |
+| PUT     | `/learning/paths/{id}/review-settings`          | 复习目标 `{desired_retention}`                                      |
+| GET     | `/learning/paths/{id}/sessions`                 | 会话列表                                                              |
+| GET     | `/learning/sessions/{sid}`                      | 会话详情（含消息）                                                    |
+| POST    | `/learning/paths/{id}/quiz`                     | 出题（无需 LLM）                                                      |
+| POST    | `/learning/paths/{id}/grade`                    | 判分（无需 LLM）                                                      |
+| POST    | `/learning/paths/{id}/assess`                   | 定性评估                                                              |
+| POST    | `/learning/paths/{id}/skip-question`            | 跳过当前题                                                            |
+| GET     | `/learning/paths/{id}/proposals`                | 候选目标（学习中提议，不改地图）                                      |
+| POST    | `/learning/paths/{id}/proposals/{pid}/resolve`  | `{action:"accept"\|"reject"}`（accept→成为 KP）                     |
+| GET     | `/learning/paths/{id}/coverage`                 | 生成质量覆盖报告（`CoverageReport`）                                |
+| POST    | `/learning/paths/{id}/eval`                     | 确定性质量指标（覆盖/接地/无环）                                      |
+| GET/PUT | `/settings/{section}`                           | 配置：`providers`/`llm`/`task-models`/`embedding`/`general` |
 
 错误码：`409 mode_conflict` / `409 rebuild_requires_confirm` / `409 cas_conflict` / `412 precondition` / `422 invalid_map`。
 
@@ -182,15 +182,15 @@ WS /ws
 
 ## 7. 工具清单（Loop 挂载）
 
-| 工具 | 归属模式 | 作用 |
-| --- | --- | --- |
-| `mastery_build` / `mastery_revise` | outline | 生成 / 编辑大纲 |
-| `mastery_quiz` | study/review | 出题（注册答案 + 出卡 + 结束回合） |
-| `mastery_grade` | study/review | 确定性判分（幂等） |
-| `mastery_assess` | study/review | concept/design 定性通过 |
-| `mastery_skip_question` | study/review | 放弃当前题 |
-| `mastery_note_explained` | study/review | 记录讲解（不授予掌握） |
-| `mastery_defer_objective` | study/review | 暂时跳过某目标 |
+| 工具                                   | 归属模式     | 作用                               |
+| -------------------------------------- | ------------ | ---------------------------------- |
+| `mastery_build` / `mastery_revise` | outline      | 生成 / 编辑大纲                    |
+| `mastery_quiz`                       | study/review | 出题（注册答案 + 出卡 + 结束回合） |
+| `mastery_grade`                      | study/review | 确定性判分（幂等）                 |
+| `mastery_assess`                     | study/review | concept/design 定性通过            |
+| `mastery_skip_question`              | study/review | 放弃当前题                         |
+| `mastery_note_explained`             | study/review | 记录讲解（不授予掌握）             |
+| `mastery_defer_objective`            | study/review | 暂时跳过某目标                     |
 
 > 未记录的 mode（CLI/SDK）**不门控**；错误模式下调用被拒且零状态变更。
 
@@ -228,19 +228,19 @@ store.close()
 ## 10. 前端（M7，暂未验收）
 
 ```bash
-cd web;
-npm install;
-npm run dev;
+cd web
+npm install
+npm run dev
 ```
 
 入口：
 
-| 页面 | URL |
-| --- | --- |
-| 掌握之路图集 | `http://localhost:3000/learning/mastery` |
-| 目标仪表盘 | `/learning/mastery/<pathId>` |
-| 学习工作区 | `/learning/mastery/<pathId>/sessions` |
-| 设置中心 | `/settings/connections`（提供方）、`/settings/llm`、`/settings/task-models`、`/settings/embedding`、`/settings/general` |
+| 页面         | URL                                                                                                                               |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| 掌握之路图集 | `http://localhost:3000/learning/mastery`                                                                                        |
+| 目标仪表盘   | `/learning/mastery/<pathId>`                                                                                                    |
+| 学习工作区   | `/learning/mastery/<pathId>/sessions`                                                                                           |
+| 设置中心     | `/settings/connections`（提供方）、`/settings/llm`、`/settings/task-models`、`/settings/embedding`、`/settings/general` |
 
 - 后端地址：`NEXT_PUBLIC_API_BASE`（默认 `http://127.0.0.1:8001`）。
 - 页面构成对齐 DeepTutor：`AppShell` + 侧栏；mastery 三页；设置中心为**独立外壳**（左上「返回主页面」）+ 分组导航，提供方/模型页为**主从**（左侧列表 + 「添加」面板 + 右侧编辑器）。

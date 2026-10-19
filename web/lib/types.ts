@@ -165,3 +165,100 @@ export interface ModelSection {
   models: ModelEntry[];
   active_id: string;
 }
+
+export interface EmbeddingModelRef {
+  model_id?: string;
+  provider_id?: string;
+  name?: string;
+  model?: string;
+  dimension?: number;
+}
+
+export interface LinkedFolder {
+  id: string;
+  path: string;
+  file_count: number;
+  added_at: number;
+  added_at_iso?: string;
+  last_sync?: number | null;
+}
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  mode: "import" | "link";
+  rag_provider: string;
+  search_mode: string;
+  embedding_model: EmbeddingModelRef;
+  status: string;
+  error: string;
+  created_at: number;
+  updated_at: number;
+  last_indexed_at: number | null;
+  created_at_iso: string;
+  updated_at_iso: string;
+  last_indexed_at_iso: string;
+  disk_path: string;
+  doc_count: number;
+  linked_folders: LinkedFolder[];
+}
+
+export interface KnowledgeFile {
+  path: string;
+  size: number;
+  modified_at: string;
+}
+
+export interface ChatSessionSummary {
+  session_id: string;
+  title: string;
+  model_id: string;
+  kb_ids: string[];
+  message_count: number;
+  last_message: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChatAttachment {
+  name: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  attachments: ChatAttachment[];
+  created_at: number;
+}
+
+export interface ChatSessionDetail {
+  session: ChatSessionSummary;
+  messages: ChatMessage[];
+}
+
+export interface ChatTurnEvent {
+  type: "delta" | "done" | "error";
+  text?: string;
+  message?: string;
+  session_id?: string;
+  title?: string;
+}
+
+export interface QuestionEntry {
+  entry_id: string;
+  path_id: string;
+  path_name?: string;
+  knowledge_point_name: string;
+  question: string;
+  question_type: string;
+  correct_answer: string;
+  user_answer: string;
+  explanation: string;
+  is_correct: boolean | null;
+  result: string;
+  tags: string[];
+  created_at: number;
+}

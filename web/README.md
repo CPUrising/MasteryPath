@@ -50,10 +50,14 @@ i18n/{zh,en}.json
 - 复习目标 ← `PUT .../review-settings`
 - 接资料 ← `POST .../sources`
 - 学习工作区 ← `WS /ws`（对话）与 `POST .../quiz|grade|assess|skip-question`（**无 LLM 也能判分**）
-- 设置中心 ← `GET/PUT /settings/{section}`
+- 设置中心 ← `GET/PUT /settings/{section}`、`POST /settings/providers/probe|fetch-models`、`POST /settings/models/detect-dimension`
+- 聊天主页 ← `/chat`、`GET/POST /chat/sessions`、`POST /chat/sessions/{id}/turns`（SSE 流式）
+- 知识库 ← `/knowledge-bases`、`GET/POST /knowledge-bases`、`POST .../folders`、`POST .../reindex`
+- 学习空间 ← `/space`（聊天历史 / 知识库 / 题库）、`GET /questions`
 
 ## 说明
 
 - 状态语言用**形态**（filled→ring→outline），不靠颜色（`globals.css` 的 `mastery-*`）。
 - 学习者内部调度量（S₀/D₀/公式）**不暴露**；`ungrounded` 知识点显示「来源」标记。
 - 对话回合需要已配置的模型提供方；未配置时输入框旁给出提示（出题/判分走 REST，不依赖模型）。
+- 知识库向量检索：后端需安装 `rag` 可选依赖（`pip install -e ".[dev,rag]"`）；未安装嵌入模型时知识库标记 `rag_prerequisite_missing`，不会静默降级。

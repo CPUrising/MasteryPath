@@ -11,8 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from masterypath.agents.llm import DeepSeekClient
 from masterypath.agents.loop import AgentLoop
 from masterypath.agents.task_model import TaskModel
+from masterypath.api.chat_routes import register_chat_routes
+from masterypath.api.knowledge_routes import register_knowledge_routes
 from masterypath.capabilities.mastery import mode as mode_policy
 from masterypath.capabilities.mastery.tools import TOOLS, ToolContext
+from masterypath.chat.service import ChatService, ClientFactory as ChatClientFactory
+from masterypath.chat.store import ChatStore
+from masterypath.knowledge.service import KnowledgeService
+from masterypath.knowledge.store import KnowledgeStore
 from masterypath.learning.outline import OutlineError
 from masterypath.learning.service import LearningService
 from masterypath.learning.storage import LearningStore, PreconditionError
@@ -42,6 +48,10 @@ def create_app(
     source_map: dict[str, str] | None = None,
     selected_source_ids: set[str] | None = None,
     settings_store: SettingsStore | None = None,
+    knowledge_store: KnowledgeStore | None = None,
+    chat_store: ChatStore | None = None,
+    chat_client_factory: ChatClientFactory | None = None,
+    embedder_factory: Callable[[dict[str, Any]], Any] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="MasteryPath")
     app.add_middleware(
@@ -55,6 +65,19 @@ def create_app(
         store, source_map=source_map, selected_source_ids=selected_source_ids
     )
     settings = settings_store or SettingsStore(store.base_dir)
+    knowledge_service = KnowledgeService(
+        knowledge_store or KnowledgeStore(store.base_dir),
+        settings,
+        embedder_factory=embedder_factory,
+    )
+    chat_service = ChatService(
+        chat_store or ChatStore(store.base_dir),
+        settings,
+        knowledge=knowledge_service,
+        client_factory=chat_client_factory,
+    )
+    app.state.knowledge_service = knowledge_service
+    app.state.chat_service = chat_service
     app.state.session_modes: dict[str, str] = {}
     app.state.client_factory = client_factory or (lambda: DeepSeekClient())
     task_model = TaskModel(client_factory=app.state.client_factory)
@@ -460,6 +483,26 @@ def create_app(
         except Exception:  # pragma: no cover - persistence is best-effort
             pass
         await websocket.close()
+
+    # -- knowledge bases / general chat -----------------------------------
+    register_knowledge_routes(app, knowledge_service)
+    register_chat_routes(app, chat_service)
+
+    # -- question bank (global view, aggregated across paths) -------------
+    @app.get("/questions")
+    def all_questions(path_id: str | None = None, tag: str | None = None) -> list[dict]:
+        if path_id:
+            return service.list_questions(path_id, tag=tag)
+        out: list[dict] = []
+        for progress in store.list_paths():
+            name = progress.name or progress.path_id
+            for entry in store.list_bank_entries(progress.path_id):
+                if tag and tag not in entry.tags:
+                    continue
+                row = entry.model_dump()
+                row["path_name"] = name
+                out.append(row)
+        return out
 
     return app
 

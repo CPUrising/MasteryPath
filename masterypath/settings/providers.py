@@ -276,6 +276,85 @@ def _dimension_from_payload(payload: Any) -> int:
     return 0
 
 
+class ProviderError(RuntimeError):
+    """A provider call failed; the message is safe to show to the learner."""
+
+
+def _embeddings_from_payload(payload: Any) -> list[list[float]]:
+    if not isinstance(payload, dict):
+        raise ProviderError("The embedding endpoint returned an unexpected payload.")
+    vectors = payload.get("embeddings")
+    if vectors is None:
+        data = payload.get("data")
+        if isinstance(data, list):
+            vectors = [
+                item.get("embedding") if isinstance(item, dict) else None
+                for item in data
+            ]
+    if not isinstance(vectors, list):
+        raise ProviderError("The embedding endpoint returned no vectors.")
+    out: list[list[float]] = []
+    for vector in vectors:
+        if not isinstance(vector, list) or not vector:
+            raise ProviderError("The embedding endpoint returned an empty vector.")
+        out.append([float(value) for value in vector])
+    return out
+
+
+def embed_texts(
+    protocol: str,
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    texts: list[str],
+    *,
+    client: httpx.Client | None = None,
+) -> list[list[float]]:
+    """Embed one batch of texts through the configured provider.
+
+    Supports OpenAI-compatible ``/embeddings`` endpoints and Ollama's
+    ``/api/embed``. Raises :class:`ProviderError` with a safe message; upstream
+    bodies are never echoed because they can contain credentials.
+    """
+    protocol = (protocol or "openai").strip().lower()
+    base_url = (base_url or "").strip()
+    model = (model or "").strip()
+    if not texts:
+        return []
+    if not model or not valid_base_url(base_url):
+        raise ProviderError("The embedding provider is not configured.")
+    if protocol == "anthropic":
+        raise ProviderError("Anthropic does not expose an embeddings endpoint.")
+
+    url = _embedding_request(protocol, base_url)
+    headers = _auth_headers(protocol, api_key)
+    body = {"model": model, "input": texts}
+    http, owned = _use_client(client)
+    try:
+        response = http.post(url, headers=headers, json=body, timeout=60.0)
+    except httpx.TimeoutException as exc:
+        raise ProviderError("The embedding request timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise ProviderError("Could not reach the embedding provider.") from exc
+    finally:
+        if owned:
+            http.close()
+
+    if response.status_code != 200:
+        raise ProviderError(
+            f"The embedding provider returned HTTP {response.status_code}."
+        )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ProviderError("The embedding provider returned invalid JSON.") from exc
+    vectors = _embeddings_from_payload(payload)
+    if len(vectors) != len(texts):
+        raise ProviderError("The embedding provider returned the wrong vector count.")
+    return vectors
+
+
+
 def detect_dimension(
     protocol: str,
     base_url: str,
@@ -396,8 +475,10 @@ ProbeFn = Callable[..., dict[str, Any]]
 
 __all__ = [
     "PROVIDER_CATALOG",
+    "ProviderError",
     "classify_model",
     "detect_dimension",
+    "embed_texts",
     "fetch_models",
     "probe_provider",
     "provider_catalog",
