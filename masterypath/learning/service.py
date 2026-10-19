@@ -10,25 +10,33 @@ from typing import Any
 import time
 import uuid
 
+from masterypath.capabilities.mastery import behavior
 from masterypath.learning import grading, mastery, policy, scheduler
 from masterypath.learning.models import (
     AssessmentResult,
     AssessmentType,
+    CoverageReport,
     DeferredObjective,
+    GapKind,
     InteractionStatus,
     LearningEvidence,
     KnowledgeType,
     LearnerMasteryOverride,
     LearningProgress,
     MasteryInteraction,
+    ObjectiveProposal,
     QuizAttempt,
     QuestionBankEntry,
+    SourceGap,
     TopicSource,
 )
 from masterypath.learning.outline import (
     BuildResult,
     ReviseResult,
+    apply_proposal,
     build_outline,
+    compute_coverage,
+    reject_proposal,
     resolve_gap,
     revise_outline,
 )
@@ -122,6 +130,8 @@ class LearningService:
             "next": step.to_dict(),
             "sources": [source.model_dump() for source in progress.sources],
             "gaps": [gap.model_dump() for gap in progress.source_gaps],
+            "proposals": [proposal.model_dump() for proposal in progress.proposals],
+            "coverage": progress.coverage.model_dump() if progress.coverage else None,
             "reviews": reviews,
             "review_settings": {
                 "desired_retention": progress.desired_retention,
@@ -237,6 +247,13 @@ class LearningService:
         def fn(tx):
             if tx.get_open_interaction() is not None:
                 return None
+            # Behavior budget: too many questions without an answer (INV-60).
+            tx.require(
+                tx.progress.consecutive_questions < behavior.MAX_CONSECUTIVE_QUESTIONS,
+                "Too many questions in a row without an answer; let the learner "
+                "answer before asking again.",
+            )
+            tx.progress.consecutive_questions += 1
             tx.progress.pending_question = pending
             interaction = MasteryInteraction(
                 interaction_id=pending.question_id,
@@ -298,6 +315,8 @@ class LearningService:
                 result = "partial"  # open never grants mastery alone (INV-35)
             if hints_used > 0 and result == "correct":
                 result = "partial"  # INV-36
+            if hints_used > behavior.MAX_HINTS_PER_QUESTION and result == "correct":
+                result = "partial"  # hint budget exceeded (INV-60)
             is_correct = result == "correct"
 
             was_mastered = policy.is_mastered(tx.progress, kp)
@@ -338,6 +357,7 @@ class LearningService:
                 gate_cleared=gate_cleared, source=source, evidence_id=evidence_id,
             )
             tx.progress.pending_question = None
+            tx.progress.consecutive_questions = 0
 
             payload = {
                 "status": "graded",
@@ -489,6 +509,7 @@ class LearningService:
             current.status = InteractionStatus.ABANDONED
             tx.save_interaction(current)
             tx.progress.pending_question = None
+            tx.progress.consecutive_questions = 0
             tx.emit("question.skipped", {"question_id": question_id})
             return {"status": "abandoned", "question_id": question_id}
 
@@ -516,6 +537,104 @@ class LearningService:
 
         return self.store.mutate(path_id, fn)
 
+
+    # -- capture-and-defer (ADR-017) --------------------------------------
+    def propose_objective(
+        self,
+        path_id: str,
+        *,
+        name: str,
+        kp_type: str,
+        reason: str = "",
+        module_id: str = "",
+        source_ids: list[str] | None = None,
+        proposed_by: str = "tutor",
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> dict[str, Any]:
+        """Record a candidate objective without touching the map (INV-53/54)."""
+
+        def fn(tx):
+            proposal = ObjectiveProposal(
+                id=uuid.uuid4().hex,
+                path_id=path_id,
+                name=name.strip(),
+                type=KnowledgeType(kp_type),
+                reason=reason,
+                module_id=module_id,
+                source_ids=list(source_ids or []),
+                proposed_by=proposed_by if proposed_by in ("learner", "tutor") else "tutor",
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+            tx.progress.proposals.append(proposal)
+            tx.emit(
+                "objective.proposed",
+                {"proposal_id": proposal.id, "name": proposal.name, "type": proposal.type.value},
+            )
+            return {"proposal_id": proposal.id, "status": "pending"}
+
+        return self.store.mutate(path_id, fn)
+
+    def note_gap(self, path_id: str, *, kind: str, ref: str = "", reason: str = "") -> dict[str, Any]:
+        def fn(tx):
+            gap = SourceGap(id=f"g{uuid.uuid4().hex[:8]}", kind=GapKind(kind), ref=ref, reason=reason)
+            tx.progress.source_gaps.append(gap)
+            tx.emit("gap.noted", {"gap_id": gap.id, "kind": kind, "ref": ref})
+            return {"gap_id": gap.id}
+
+        return self.store.mutate(path_id, fn)
+
+    def resolve_proposal(self, path_id: str, proposal_id: str, action: str) -> dict[str, Any]:
+        def fn(tx):
+            if action == "accept":
+                proposal = apply_proposal(tx.progress, proposal_id)
+                tx.progress.coverage = compute_coverage(
+                    tx.progress, {source.id for source in tx.progress.sources}
+                )
+            elif action == "reject":
+                proposal = reject_proposal(tx.progress, proposal_id)
+            else:
+                raise PreconditionError(f"unknown proposal action: {action!r}")
+            tx.emit(
+                "objective.proposal_resolved",
+                {"proposal_id": proposal_id, "action": action},
+            )
+            return {"proposal_id": proposal_id, "status": proposal.status}
+
+        return self.store.mutate(path_id, fn)
+
+    # -- generation quality (ADR-018) -------------------------------------
+    def get_coverage(self, path_id: str) -> dict[str, Any] | None:
+        progress = self.store.load(path_id)
+        if progress is None:
+            return None
+        return progress.coverage.model_dump() if progress.coverage else None
+
+    def eval_outline(self, path_id: str) -> dict[str, Any] | None:
+        """Deterministic quality metrics for the current map (INV-57 / `09`)."""
+        progress = self.store.load(path_id)
+        if progress is None:
+            return None
+        selected = {source.id for source in progress.sources}
+        report = compute_coverage(progress, selected)
+        coverage_ratio = (report.covered / report.documents) if report.documents else 1.0
+        thresholds = {"coverage": 0.9, "grounding": 1.0, "acyclic": True}
+        passed = (
+            coverage_ratio >= thresholds["coverage"]
+            and report.grounding_ratio >= thresholds["grounding"]
+            and report.acyclic
+        )
+        return {
+            "coverage_ratio": coverage_ratio,
+            "grounding_ratio": report.grounding_ratio,
+            "acyclic": report.acyclic,
+            "documents": report.documents,
+            "covered": report.covered,
+            "missing": [gap.model_dump() for gap in report.missing],
+            "passed": passed,
+            "thresholds": thresholds,
+        }
 
     # -- question bank (M6) ------------------------------------------------
     def list_questions(self, path_id: str, *, tag: str | None = None) -> list[dict[str, Any]]:

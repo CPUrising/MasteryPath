@@ -247,6 +247,35 @@ def create_app(
         except PreconditionError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
+    # -- capture / coverage / eval (ADR-017/018) --------------------------
+    @app.get("/learning/paths/{path_id}/proposals")
+    def proposals(path_id: str) -> list[dict]:
+        state = service.get_state(path_id)
+        if state["status"] == "missing":
+            raise HTTPException(status_code=404, detail="unknown path")
+        return state["proposals"]
+
+    @app.post("/learning/paths/{path_id}/proposals/{proposal_id}/resolve")
+    def resolve_proposal(path_id: str, proposal_id: str, payload: dict[str, Any] = Body(...)) -> dict:
+        try:
+            return service.resolve_proposal(path_id, proposal_id, str(payload.get("action") or ""))
+        except (OutlineError, PreconditionError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    @app.get("/learning/paths/{path_id}/coverage")
+    def coverage(path_id: str) -> dict:
+        report = service.get_coverage(path_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="unknown path")
+        return report
+
+    @app.post("/learning/paths/{path_id}/eval")
+    def eval_outline(path_id: str) -> dict:
+        result = service.eval_outline(path_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="unknown path")
+        return result
+
     # -- settings (API configuration) -------------------------------------
     @app.get("/settings")
     def get_settings() -> dict:

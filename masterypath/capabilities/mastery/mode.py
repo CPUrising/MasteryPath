@@ -34,6 +34,8 @@ STUDY_REVIEW: frozenset[str] = frozenset(
         "mastery_repair_question",
         "mastery_defer_objective",
         "mastery_note_explained",
+        "mastery_propose_objective",
+        "mastery_note_gap",
     }
 )
 

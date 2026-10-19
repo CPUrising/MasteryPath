@@ -141,6 +141,18 @@ python -m venv .venv
 - 仅 `.txt/.md`（无额外依赖）；PDF/DOCX 可后续在同一接口后扩展。
 - 来源的 `excerpt` 供大纲提示词使用；`label` 是大纲 `materials/sources` 引用的键。
 
+## 捕获-延后 / 质量评测 / 行为契约（ADR-016–019）
+
+| 内容 | 状态 |
+| --- | --- |
+| 捕获工具 `mastery_propose_objective` / `mastery_note_gap`（study/review，只记录不改地图） | ✅ |
+| reconcile：`POST …/proposals/{id}/resolve`（accept → 经 revise 成为 KP） | ✅ |
+| `build` 返回 `CoverageReport`（coverage/grounding/acyclic/reported）；`GET …/coverage` | ✅ |
+| `POST …/eval` + `python -m masterypath.eval outline --cases …`（确定性 + 令牌重叠代理） | ✅ |
+| 行为预算：单回合工具 ≤6（loop）、连续追问 ≤3、同题提示 ≤2（`behavior.py`） | ✅ |
+
+- 规格：`docs/08-tutor-behavior.md`、`docs/09-outline-eval.md`；不变量 `INV-53…60`。
+
 ## 运行
 
 ```powershell

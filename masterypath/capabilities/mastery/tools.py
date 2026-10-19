@@ -416,7 +416,65 @@ class MasteryAssessTool:
         )
 
 
-# Tools mounted on every mastery turn (M2 + M3 + M4 set).
+class MasteryProposeObjectiveTool:
+    name = "mastery_propose_objective"
+    description = (
+        "Record a candidate objective discovered while learning — a missing "
+        "prerequisite, a new sub-topic. It does NOT change the map or the "
+        "frontier; the outline reconciles it later."
+    )
+
+    def execute(self, params: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        refusal = _wrong_mode_result(self.name, ctx)
+        if refusal is not None:
+            return refusal
+        name = str(params.get("name") or "").strip()
+        if len(name) < 2:
+            return ToolResult(ok=False, content="a candidate objective needs a name of 2+ characters")
+        try:
+            result = ctx.service.propose_objective(
+                ctx.path_id,
+                name=name,
+                kp_type=str(params.get("type") or ""),
+                reason=str(params.get("reason") or ""),
+                module_id=str(params.get("module_id") or ""),
+                source_ids=[str(s) for s in (params.get("sources") or [])],
+                session_id=ctx.session_id,
+                turn_id=ctx.turn_id,
+            )
+        except (ValueError, PreconditionError) as exc:
+            return ToolResult(ok=False, content=str(exc))
+        return ToolResult(ok=True, content="Recorded a candidate objective.", metadata=result)
+
+
+class MasteryNoteGapTool:
+    name = "mastery_note_gap"
+    description = (
+        "Record a coverage gap found while learning (a goal requirement the "
+        "materials do not cover, or a selected source nothing uses). Does not "
+        "change the map."
+    )
+
+    def execute(self, params: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        refusal = _wrong_mode_result(self.name, ctx)
+        if refusal is not None:
+            return refusal
+        kind = str(params.get("kind") or "").strip()
+        if kind not in ("goal_gap", "source_omission"):
+            return ToolResult(ok=False, content="kind must be goal_gap or source_omission")
+        try:
+            result = ctx.service.note_gap(
+                ctx.path_id,
+                kind=kind,
+                ref=str(params.get("ref") or ""),
+                reason=str(params.get("reason") or ""),
+            )
+        except (ValueError, PreconditionError) as exc:
+            return ToolResult(ok=False, content=str(exc))
+        return ToolResult(ok=True, content="Recorded a coverage gap.", metadata=result)
+
+
+# Tools mounted on every mastery turn (M2 + M3 + M4 + capture set).
 TOOLS = {
     MasteryBuildTool.name: MasteryBuildTool(),
     MasteryReviseTool.name: MasteryReviseTool(),
@@ -426,6 +484,8 @@ TOOLS = {
     MasterySkipQuestionTool.name: MasterySkipQuestionTool(),
     MasteryNoteExplainedTool.name: MasteryNoteExplainedTool(),
     MasteryDeferObjectiveTool.name: MasteryDeferObjectiveTool(),
+    MasteryProposeObjectiveTool.name: MasteryProposeObjectiveTool(),
+    MasteryNoteGapTool.name: MasteryNoteGapTool(),
 }
 
 
@@ -436,6 +496,8 @@ __all__ = [
     "MasteryDeferObjectiveTool",
     "MasteryGradeTool",
     "MasteryNoteExplainedTool",
+    "MasteryNoteGapTool",
+    "MasteryProposeObjectiveTool",
     "MasteryQuizTool",
     "MasteryReviseTool",
     "MasterySkipQuestionTool",

@@ -156,6 +156,10 @@ events = AgentLoop(TOOLS).run(client, [{"role": "user", "content": "带我学 X"
 | POST | `/learning/paths/{id}/grade` | 判分（无需 LLM） |
 | POST | `/learning/paths/{id}/assess` | 定性评估 |
 | POST | `/learning/paths/{id}/skip-question` | 跳过当前题 |
+| GET | `/learning/paths/{id}/proposals` | 候选目标（学习中提议，不改地图） |
+| POST | `/learning/paths/{id}/proposals/{pid}/resolve` | `{action:"accept"\|"reject"}`（accept→成为 KP） |
+| GET | `/learning/paths/{id}/coverage` | 生成质量覆盖报告（`CoverageReport`） |
+| POST | `/learning/paths/{id}/eval` | 确定性质量指标（覆盖/接地/无环） |
 | GET/PUT | `/settings/{section}` | 配置：`providers`/`llm`/`task-models`/`embedding`/`general` |
 
 错误码：`409 mode_conflict` / `409 rebuild_requires_confirm` / `409 cas_conflict` / `412 precondition` / `422 invalid_map`。

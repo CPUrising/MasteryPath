@@ -14,12 +14,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from masterypath.learning.models import (
+    CoverageGap,
+    CoverageReport,
     GapKind,
     GapResolution,
     KnowledgePoint,
     KnowledgeType,
     LearningModule,
     LearningProgress,
+    ObjectiveProposal,
     SourceGap,
 )
 
@@ -128,6 +131,63 @@ def _detect_gaps(
 
 
 # -- build ----------------------------------------------------------------
+def compute_coverage(
+    progress: LearningProgress, selected_source_ids: set[str]
+) -> CoverageReport:
+    """Generation-quality report (ADR-018 / INV-56).
+
+    Deterministic: coverage/grounding/acyclic need no model. ``reported`` is
+    false when no objective cites a source — nothing can be concluded, so
+    ``missing`` stays empty rather than listing every document.
+    """
+    modules = progress.modules
+    all_kps = [kp for module in modules for kp in module.knowledge_points]
+    used: set[str] = set()
+    for kp in all_kps:
+        used.update(kp.source_ids)
+    reported = bool(used)
+    documents = len(selected_source_ids)
+    covered = len(selected_source_ids & used)
+    missing = (
+        [
+            CoverageGap(label=source_id, document=source_id)
+            for source_id in sorted(selected_source_ids - used)
+        ]
+        if reported
+        else []
+    )
+    grounded = sum(1 for kp in all_kps if kp.source_ids)
+    grounding_ratio = (grounded / len(all_kps)) if all_kps else 1.0
+    return CoverageReport(
+        documents=documents,
+        covered=covered,
+        missing=missing,
+        reported=reported,
+        grounding_ratio=grounding_ratio,
+        acyclic=_is_acyclic(all_kps),
+    )
+
+
+def _is_acyclic(kps: list[KnowledgePoint]) -> bool:
+    graph = {kp.id: [p for p in kp.prerequisite_ids] for kp in kps}
+    state: dict[str, int] = {}
+
+    def visit(node: str) -> bool:
+        marker = state.get(node, 0)
+        if marker == 1:
+            return False
+        if marker == 2:
+            return True
+        state[node] = 1
+        for neighbour in graph.get(node, []):
+            if neighbour in graph and not visit(neighbour):
+                return False
+        state[node] = 2
+        return True
+
+    return all(visit(node) for node in graph)
+
+
 def build_outline(
     progress: LearningProgress,
     payload: dict[str, Any],
@@ -164,6 +224,7 @@ def build_outline(
 
     gaps = _detect_gaps(modules, selected, len(progress.source_gaps))
     progress.source_gaps = gaps
+    progress.coverage = compute_coverage(progress, selected)
     return BuildResult(status="built", modules=modules, gaps=gaps, rebuilt=replacing)
 
 
@@ -287,6 +348,7 @@ def revise_outline(
         progress.modules, set(selected_source_ids or []), 0
     )
     progress.source_gaps = result.gaps
+    progress.coverage = compute_coverage(progress, set(selected_source_ids or []))
     return result
 
 
@@ -449,11 +511,54 @@ def resolve_gap(
     raise OutlineError(f"unknown gap_id: {gap_id!r}")
 
 
+# -- proposals (ADR-017 reconcile) ---------------------------------------
+def apply_proposal(progress: LearningProgress, proposal_id: str) -> ObjectiveProposal:
+    """Accept a candidate objective into the map (outline only, INV-54)."""
+    proposal = next((p for p in progress.proposals if p.id == proposal_id), None)
+    if proposal is None:
+        raise OutlineError(f"unknown proposal: {proposal_id!r}")
+    if proposal.status != "pending":
+        return proposal
+    module = None
+    if proposal.module_id:
+        module = next((m for m in progress.modules if m.id == proposal.module_id), None)
+    if module is None and progress.modules:
+        module = progress.modules[0]
+    if module is None:
+        module = LearningModule(id=_next_id("m", _existing_ids(progress)), name="提议目标", order=0)
+        progress.modules.append(module)
+    kp_id = _next_id("k", _existing_ids(progress))
+    module.knowledge_points.append(
+        KnowledgePoint(
+            id=kp_id,
+            name=proposal.name,
+            type=proposal.type,
+            module_id=module.id,
+            source_ids=list(proposal.source_ids),
+        )
+    )
+    progress.knowledge_types[kp_id] = proposal.type
+    proposal.status = "accepted"
+    return proposal
+
+
+def reject_proposal(progress: LearningProgress, proposal_id: str) -> ObjectiveProposal:
+    proposal = next((p for p in progress.proposals if p.id == proposal_id), None)
+    if proposal is None:
+        raise OutlineError(f"unknown proposal: {proposal_id!r}")
+    if proposal.status == "pending":
+        proposal.status = "rejected"
+    return proposal
+
+
 __all__ = [
     "BuildResult",
     "OutlineError",
     "ReviseResult",
+    "apply_proposal",
     "build_outline",
+    "compute_coverage",
+    "reject_proposal",
     "resolve_gap",
     "revise_outline",
 ]

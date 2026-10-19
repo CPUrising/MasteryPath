@@ -264,6 +264,49 @@ class SourceGap(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class ObjectiveProposal(BaseModel):
+    """A candidate objective proposed during study (ADR-017 / INV-53).
+
+    Not a knowledge point: it does not affect the map, the frontier, or the
+    gate until the outline accepts it (via ``mastery_revise``).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    path_id: str = ""
+    name: str
+    type: KnowledgeType
+    reason: str = ""
+    source_ids: list[str] = Field(default_factory=list)
+    module_id: str = ""
+    status: Literal["pending", "accepted", "rejected"] = "pending"
+    proposed_by: Literal["learner", "tutor"] = "tutor"
+    session_id: str = ""
+    turn_id: str = ""
+    created_at: float = Field(default_factory=time.time)
+
+
+class CoverageGap(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    label: str
+    document: str = ""
+
+
+class CoverageReport(BaseModel):
+    """Generation-quality report attached to a build (ADR-018 / INV-56)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    documents: int = 0
+    covered: int = 0
+    missing: list[CoverageGap] = Field(default_factory=list)
+    reported: bool = False
+    grounding_ratio: float = 1.0
+    acyclic: bool = True
+
+
 class MasteryInteraction(BaseModel):
     """A persisted question/answer transaction (key = interaction_id)."""
 
@@ -386,6 +429,12 @@ class LearningProgress(BaseModel):
     deferred_objectives: dict[str, DeferredObjective] = Field(default_factory=dict)
     explained_objectives: dict[str, dict[str, Any]] = Field(default_factory=dict)
     source_gaps: list[SourceGap] = Field(default_factory=list)
+    # Candidate objectives proposed during study (ADR-017); not knowledge points.
+    proposals: list[ObjectiveProposal] = Field(default_factory=list)
+    # Latest build's generation-quality report (ADR-018).
+    coverage: CoverageReport | None = None
+    # Consecutive questions posed without an answer (behavior budget, INV-60).
+    consecutive_questions: int = 0
     pending_question: PendingQuestion | None = None
     desired_retention: float = Field(default=0.9, ge=0.7, le=0.99, allow_inf_nan=False)
     version: int = 0
@@ -419,6 +468,9 @@ __all__ = [
     "LearnerMasteryOverride",
     "DeferredObjective",
     "SourceGap",
+    "ObjectiveProposal",
+    "CoverageGap",
+    "CoverageReport",
     "MasteryInteraction",
     "MasteryEvent",
     "QuestionBankEntry",

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from masterypath.agents.llm import LLMClient
-from masterypath.capabilities.mastery import mode
+from masterypath.capabilities.mastery import behavior, mode
 from masterypath.capabilities.mastery.tools import ToolContext, ToolResult
 
 
@@ -56,6 +56,7 @@ class AgentLoop:
         tool_names = sorted(self.tools)
         ended = {"value": False}
         ctx.end_turn = lambda: ended.__setitem__("value", True)
+        tool_calls = 0
 
         for _ in range(self.max_rounds):
             response = client.chat(history, tool_names)
@@ -65,6 +66,11 @@ class AgentLoop:
                 events.append(StreamEvent("turn_end", {"reason": "done"}))
                 return events
             for call in response.tool_calls:
+                tool_calls += 1
+                if tool_calls > behavior.MAX_TOOL_CALLS_PER_TURN:
+                    # Behavior budget (INV-60): stop making calls this turn.
+                    events.append(StreamEvent("turn_end", {"reason": "budget"}))
+                    return events
                 events.append(
                     StreamEvent(
                         "tool_call",
