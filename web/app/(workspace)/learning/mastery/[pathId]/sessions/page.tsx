@@ -7,15 +7,23 @@ import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { LevelUpCelebration } from "@/components/learning/LevelUpCelebration";
-import { MasteryComposer } from "@/components/learning/MasteryComposer";
+import { MessageComposer } from "@/components/common/MessageComposer";
 import { ModeSwitch } from "@/components/learning/ModeSwitch";
 import { ProgressRing } from "@/components/learning/ProgressRing";
 import { QuestionCard } from "@/components/learning/QuestionCard";
 import { StudyOutline } from "@/components/learning/StudyOutline";
 import { api } from "@/lib/api";
+import { knowledgeApi } from "@/lib/knowledge-api";
 import { masteryTopicRoute } from "@/lib/learning-routes";
 import { MODE_NOTES, normalizeMode } from "@/lib/mastery-mode";
-import type { LLMSelection, Mode, ModelEntry, ModelSection, PathState } from "@/lib/types";
+import type {
+  KnowledgeBase,
+  LLMSelection,
+  Mode,
+  ModelEntry,
+  ModelSection,
+  PathState,
+} from "@/lib/types";
 import { runTurn } from "@/lib/ws";
 
 interface Item {
@@ -47,6 +55,12 @@ function StudyRoute() {
   const [celebration, setCelebration] = useState<string | null>(null);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [selection, setSelection] = useState<LLMSelection | null>(null);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [kbIds, setKbIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    knowledgeApi.list().then(setKnowledgeBases).catch(() => setKnowledgeBases([]));
+  }, []);
 
   useEffect(() => {
     api
@@ -65,14 +79,34 @@ function StudyRoute() {
     api
       .getSession(sessionId)
       .then((detail) => {
-        const stored = (detail.session as unknown as {
-          preferences?: { llm_selection?: LLMSelection };
-        })?.preferences?.llm_selection;
-        if (stored?.model_id) setSelection(stored);
+        const preferences = (detail.session as unknown as {
+          preferences?: { llm_selection?: LLMSelection; knowledge_bases?: string[] | null };
+        })?.preferences;
+        if (preferences?.llm_selection?.model_id) setSelection(preferences.llm_selection);
+        if (preferences && preferences.knowledge_bases != null) {
+          setKbIds(preferences.knowledge_bases ?? []);
+        }
       })
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // Until a session override exists, follow the path's default knowledge bases.
+  useEffect(() => {
+    setKbIds((current) =>
+      current.length ? current : state?.knowledge_bases?.map((kb) => kb.id) ?? [],
+    );
+  }, [state?.knowledge_bases]);
+
+  const changeKnowledgeBases = useCallback(
+    (ids: string[]) => {
+      setKbIds(ids);
+      void api
+        .patchSession(pathId, sessionId, { preferences: { knowledge_bases: ids } })
+        .catch(() => undefined);
+    },
+    [pathId, sessionId],
+  );
 
   const changeModel = useCallback(
     (modelId: string) => {
@@ -130,6 +164,7 @@ function StudyRoute() {
       setBusy(true);
       setItems((previous) => [...previous, { role: "user", text }]);
       let assistant = "";
+      let reported = false;
       try {
         await runTurn(
           {
@@ -141,11 +176,18 @@ function StudyRoute() {
           },
           (event) => {
             if (event.type === "text_delta") assistant += String(event.data.text ?? "");
-            if (event.type === "error") assistant = String(event.data.message ?? "");
+            if (event.type === "session_meta") {
+              const next = event.data.mastery_session_mode;
+              if (typeof next === "string") setMode(normalizeMode(next));
+            }
+            if (event.type === "error") {
+              assistant = String(event.data.message ?? "");
+              reported = true;
+            }
           },
         );
       } catch (reason) {
-        assistant = `${t("study.noProvider")} (${String(reason)})`;
+        if (!reported) assistant = `${t("study.noProvider")} (${String(reason)})`;
       }
       setItems((previous) => [...previous, { role: "assistant", text: assistant }]);
       await load().catch(() => undefined);
@@ -173,20 +215,6 @@ function StudyRoute() {
           <div className="truncate text-[12px] text-muted-foreground">{next.knowledge_point_name}</div>
         </div>
         <ModeSwitch mode={mode} onSelect={changeMode} disabled={busy} />
-        <select
-          aria-label={t("chat.model")}
-          value={selection?.model_id ?? ""}
-          disabled={busy || models.length === 0}
-          onChange={(event) => changeModel(event.target.value)}
-          className="h-7 max-w-[190px] rounded-md border border-border bg-background px-1.5 text-[12px]"
-        >
-          {models.length === 0 && <option value="">{t("chat.noModel")}</option>}
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name || model.model}
-            </option>
-          ))}
-        </select>
         <div className="flex items-center gap-1.5 pl-2">
           <ProgressRing value={progress} size={18} stroke={2} showLabel={false} />
           <span className="text-[12px] tabular-nums text-muted-foreground">
@@ -249,11 +277,17 @@ function StudyRoute() {
               )}
             </div>
           </div>
-          <MasteryComposer
+          <MessageComposer
+            models={models}
+            modelId={selection?.model_id ?? ""}
+            onModelChange={changeModel}
+            knowledgeBases={knowledgeBases}
+            kbIds={kbIds}
+            onKbChange={changeKnowledgeBases}
+            streaming={busy}
+            onSend={(text) => void send(text)}
             placeholder={t("study.placeholder")}
             askHint={askHint}
-            disabled={busy}
-            onSend={send}
           />
         </section>
       </div>

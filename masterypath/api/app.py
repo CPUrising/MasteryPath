@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import queue
+import threading
 from typing import Any, Callable
 
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from masterypath.agents.llm import LLMError
-from masterypath.agents.loop import AgentLoop
+logger = logging.getLogger(__name__)
+
 from masterypath.agents.model_resolution import build_client, resolve_llm_config
 from masterypath.agents.task_model import TaskModel
+from masterypath.agents.turn_runner import TurnEvent, TurnRequest, TurnRunner
 from masterypath.api.chat_routes import register_chat_routes
 from masterypath.api.knowledge_routes import register_knowledge_routes
 from masterypath.capabilities.mastery import mode as mode_policy
@@ -93,6 +98,15 @@ def create_app(
     else:
         app.state.client_builder = _build_llm_client
     task_model = TaskModel(client_factory=lambda: app.state.client_builder())
+    turn_runner = TurnRunner(
+        chat_service=chat_service,
+        learning_service=service,
+        store=store,
+        client_builder=app.state.client_builder,
+        session_modes=app.state.session_modes,
+        knowledge_service=knowledge_service,
+    )
+    app.state.turn_runner = turn_runner
 
     def _session_mode(session_id: str) -> Any:
         session = store.get_session(session_id) if session_id else None
@@ -140,6 +154,28 @@ def create_app(
             )
         except PreconditionError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+        kb_ids = payload.get("knowledge_base_ids")
+        if isinstance(kb_ids, list) and kb_ids:
+            sources = []
+            for position, kb_id in enumerate(kb_ids):
+                try:
+                    kb = knowledge_service.get(str(kb_id))
+                except Exception:
+                    raise HTTPException(
+                        status_code=404, detail=f"unknown knowledge base: {kb_id}"
+                    )
+                sources.append(
+                    TopicSource(
+                        id=f"kb:{kb['id']}",
+                        kind="knowledge_base",
+                        source_id=kb["id"],
+                        label=kb["name"],
+                        excerpt=str(kb.get("description") or ""),
+                        position=position,
+                        available=kb.get("status") == "ready",
+                    )
+                )
+            service.set_knowledge_base_sources(path_id, sources)
         return service.get_state(path_id)
 
     @app.get("/learning/paths/{path_id}")
@@ -435,9 +471,16 @@ def create_app(
 
     @app.put("/learning/paths/{path_id}/sessions/{session_id}/mode")
     def set_mode(path_id: str, session_id: str, payload: dict[str, Any] = Body(...)) -> dict:
-        requested = mode_policy.normalize_mode(payload.get("mode"))
+        requested = str(payload.get("mode") or "").strip().lower()
+        if requested not in mode_policy.MODES:
+            raise HTTPException(
+                status_code=422,
+                detail="mode must be one of: " + ", ".join(mode_policy.MODES),
+            )
         state = service.get_state(path_id)
-        has_outline = state["status"] == "active" and bool(state["map"])
+        if state["status"] == "missing":
+            raise HTTPException(status_code=404, detail="unknown path")
+        has_outline = bool(state["map"])
         refusal = mode_policy.admission_error(requested, has_outline=has_outline)
         if refusal:
             raise HTTPException(status_code=409, detail=refusal)
@@ -498,80 +541,53 @@ def create_app(
     @app.websocket("/ws")
     async def ws_turn(websocket: WebSocket) -> None:
         await websocket.accept()
-        request = await websocket.receive_json()
-        session_id = str(request.get("session_id") or "")
-        path_id = str(request.get("path_id") or "")
-        turn_id = str(request.get("turn_id") or "")
-        session_mode = _session_mode(session_id)
-        if session_mode is None:
-            session_mode = request.get("mode")
-        ctx = ToolContext(
-            service=service,
-            path_id=path_id,
-            session_mode=session_mode,
-            session_id=session_id,
-            turn_id=turn_id,
+        payload = await websocket.receive_json()
+        request = TurnRequest(
+            capability="mastery_path",
+            session_id=str(payload.get("session_id") or ""),
+            path_id=str(payload.get("path_id") or ""),
+            mode=str(payload.get("mode") or ""),
+            turn_id=str(payload.get("turn_id") or ""),
+            llm_selection=payload.get("llm_selection"),
+            message=str(payload.get("message") or ""),
         )
-        loop = AgentLoop(TOOLS)
-        message = str(request.get("message") or "")
-        stored = store.get_session(session_id) if session_id else None
-        selection = request.get("llm_selection")
-        if not selection and stored:
-            selection = (stored.get("preferences") or {}).get("llm_selection")
-        try:
-            client = app.state.client_builder(selection, session_id)
-            events_out = loop.run(
-                client,
-                [{"role": "user", "content": message}],
-                ctx,
-            )
-        except LLMError as exc:
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "data": {
-                        "error_code": exc.code,
-                        "message": str(exc),
-                        "retryable": exc.retryable,
-                    },
-                }
-            )
-            await websocket.close()
-            return
-        for event in events_out:
-            await websocket.send_json({"type": event.type, "data": event.data})
+        # The turn runs synchronously (blocking provider I/O). Run it off the
+        # event loop and bridge events through a queue: blocking the loop would
+        # starve the WebSocket keepalive and the server would drop the socket
+        # mid-generation ("websocket error" in the browser).
+        mailbox: queue.Queue[Any] = queue.Queue()
+        done = object()
 
-        # Persist the turn (best-effort; a persistence failure must not break
-        # the stream the learner already saw).
-        text = "".join(
-            str(event.data.get("text", ""))
-            for event in events_out
-            if event.type == "text_delta"
-        )
-        card = None
-        for event in events_out:
-            if event.type == "tool_result":
-                metadata = event.data.get("metadata") or {}
-                if metadata.get("question_card"):
-                    card = metadata["question_card"]
-        try:
-            if session_id:
-                service.record_turn(
-                    path_id,
-                    session_id,
-                    user_text=message,
-                    assistant_text=text,
-                    mode=mode_policy.normalize_mode(session_mode),
-                    turn_id=turn_id,
-                    card=card,
+        def worker() -> None:
+            try:
+                for event in app.state.turn_runner.run(request):
+                    mailbox.put(event)
+            except Exception as exc:  # noqa: BLE001 - report, never crash the socket
+                logger.exception("ws turn failed")
+                mailbox.put(
+                    TurnEvent(
+                        "error",
+                        {
+                            "error_code": "internal_error",
+                            "message": f"The turn failed: {exc}",
+                            "retryable": False,
+                        },
+                    )
                 )
-        except Exception:  # pragma: no cover - persistence is best-effort
-            pass
+            finally:
+                mailbox.put(done)
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            event = await asyncio.to_thread(mailbox.get)
+            if event is done:
+                break
+            await websocket.send_json({"type": event.type, "data": event.data})
         await websocket.close()
 
     # -- knowledge bases / general chat -----------------------------------
     register_knowledge_routes(app, knowledge_service)
-    register_chat_routes(app, chat_service)
+    register_chat_routes(app, turn_runner)
 
     # -- question bank (global view, aggregated across paths) -------------
     @app.get("/questions")

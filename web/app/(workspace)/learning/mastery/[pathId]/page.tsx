@@ -7,6 +7,7 @@ import { ArrowLeft, ArrowRight, PencilRuler } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { EditKnowledgeBasesDialog } from "@/components/learning/EditKnowledgeBasesDialog";
 import { EditTopicRouteDialog } from "@/components/learning/EditTopicRouteDialog";
 import { LearnerProfileCard } from "@/components/learning/LearnerProfileCard";
 import { ModuleOutline } from "@/components/learning/ModuleOutline";
@@ -27,6 +28,7 @@ export default function MasteryTopicPage() {
   const [sessions, setSessions] = useState<TopicSession[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [kbEditor, setKbEditor] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -93,15 +95,25 @@ export default function MasteryTopicPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">{state.name || pathId}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{state.goal}</p>
-          {state.sources.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {state.sources.slice(0, 6).map((source) => (
-                <span key={source.id} className="rounded-full bg-muted px-2.5 py-1 text-[10px] text-muted-foreground">
-                  {source.label}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">{t("kb.title")}</span>
+            {state.knowledge_bases.length === 0 ? (
+              <span className="text-[11px] text-muted-foreground">{t("kb.none")}</span>
+            ) : (
+              state.knowledge_bases.map((kb) => (
+                <span key={kb.id} className="rounded-full bg-muted px-2.5 py-1 text-[10px] text-muted-foreground">
+                  {kb.name}
                 </span>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+            <button
+              type="button"
+              onClick={() => setKbEditor(true)}
+              className="text-[11px] text-primary hover:underline"
+            >
+              {t("common.edit")}
+            </button>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <span className="text-[13px] tabular-nums text-muted-foreground">
@@ -164,6 +176,14 @@ export default function MasteryTopicPage() {
           <SessionCamp pathId={pathId} sessions={sessions} loading={false} />
         </div>
       </div>
+
+      <EditKnowledgeBasesDialog
+        open={kbEditor}
+        pathId={pathId}
+        current={state.knowledge_bases.map((kb) => kb.id)}
+        onClose={() => setKbEditor(false)}
+        onSaved={() => void load()}
+      />
 
       <EditTopicRouteDialog
         open={editorOpen}

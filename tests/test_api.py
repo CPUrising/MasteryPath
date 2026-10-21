@@ -39,6 +39,9 @@ def client(tmp_path):
         ),
     )
     with TestClient(app) as c:
+        # A mastery goal exists before its outline: the outline is designed in
+        # the goal's first session.
+        c.post("/learning/paths", json={"path_id": "p", "goal": "learn X", "name": "X"})
         yield c
     store.close()
 
@@ -54,6 +57,16 @@ def test_tc_i1_map_write_requires_outline_mode(client):
     assert resp.status_code == 409
 
 
+def test_mode_rejects_unknown_value(client):
+    resp = client.put("/learning/paths/p/sessions/s1/mode", json={"mode": "banana"})
+    assert resp.status_code == 422
+
+
+def test_mode_rejects_unknown_path(client):
+    resp = client.put("/learning/paths/nope/sessions/s1/mode", json={"mode": "outline"})
+    assert resp.status_code == 404
+
+
 def test_tc_i2_rebuild_requires_confirm(client):
     client.put("/learning/paths/p/sessions/s1/mode", json={"mode": "outline"})
     resp = client.post("/learning/paths/p/rebuild", params={"session_id": "s1"}, json={})
@@ -61,10 +74,10 @@ def test_tc_i2_rebuild_requires_confirm(client):
 
 
 def test_create_and_read_path(client):
-    client.post("/learning/paths", json={"path_id": "p", "goal": "learn X", "name": "X"})
-    resp = client.get("/learning/paths/p")
+    client.post("/learning/paths", json={"path_id": "p2", "goal": "learn Y", "name": "Y"})
+    resp = client.get("/learning/paths/p2")
     assert resp.status_code == 200
-    assert resp.json()["goal"] == "learn X"
+    assert resp.json()["goal"] == "learn Y"
 
 
 def test_outline_mode_allows_map_write(client):

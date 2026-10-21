@@ -274,11 +274,8 @@ export interface ChatSessionDetail {
 }
 
 export interface ChatTurnEvent {
-  type: "delta" | "done" | "error";
-  text?: string;
-  message?: string;
-  session_id?: string;
-  title?: string;
+  type: string;
+  data: Record<string, unknown>;
 }
 
 export interface QuestionEntry {

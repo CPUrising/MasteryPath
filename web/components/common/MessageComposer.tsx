@@ -13,8 +13,15 @@ export interface ComposerAttachment {
 
 const TEXT_FILE = /\.(txt|md|markdown|csv|json|log)$/i;
 
-/** The dark chat composer: capability chip, attachments, knowledge scope, model, send. */
-export function ChatComposer({
+/**
+ * The one composer used by general chat and by the mastery tutor.
+ *
+ * Colours come from theme variables only, so the same component reads correctly
+ * on the dark chat surface and the light study surface; there is no light/dark
+ * fork. `capabilityLabel` unset hides the capability chip (mastery is a fixed
+ * capability, not a choice).
+ */
+export function MessageComposer({
   models,
   modelId,
   onModelChange,
@@ -23,6 +30,9 @@ export function ChatComposer({
   onKbChange,
   streaming,
   onSend,
+  placeholder,
+  askHint,
+  capabilityLabel,
 }: {
   models: ModelEntry[];
   modelId: string;
@@ -32,6 +42,9 @@ export function ChatComposer({
   onKbChange: (ids: string[]) => void;
   streaming: boolean;
   onSend: (text: string, attachments: ComposerAttachment[]) => void;
+  placeholder?: string;
+  askHint?: string;
+  capabilityLabel?: string;
 }) {
   const { t } = useTranslation();
   const [text, setText] = useState("");
@@ -39,11 +52,7 @@ export function ChatComposer({
   const [kbOpen, setKbOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const activeModel =
-    models.find((model) => model.id === modelId) ?? models[0] ?? null;
-  const modelLabel = activeModel
-    ? activeModel.name || activeModel.model
-    : t("chat.noModel");
+  const activeModel = models.find((model) => model.id === modelId) ?? models[0] ?? null;
 
   const readFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -68,14 +77,24 @@ export function ChatComposer({
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-5">
-      <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-3 shadow-lg backdrop-blur">
+      <div className="rounded-3xl border border-border bg-card p-3 shadow-sm">
+        {askHint && !text && (
+          <p className="px-1.5 pb-1 text-[12px] text-muted-foreground">
+            {askHint} <span className="opacity-60">· {t("study.tabHint")}</span>
+          </p>
+        )}
         <textarea
           rows={2}
           value={text}
           disabled={streaming}
-          placeholder={t("chat.placeholder")}
+          placeholder={placeholder ?? t("chat.placeholder")}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === "Tab" && !text && askHint) {
+              event.preventDefault();
+              setText(askHint);
+              return;
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               submit();
@@ -89,7 +108,7 @@ export function ChatComposer({
             {attachments.map((item) => (
               <span
                 key={item.name}
-                className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 text-[11px]"
+                className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[11px] text-foreground"
               >
                 {item.name}
                 <button
@@ -107,15 +126,17 @@ export function ChatComposer({
         )}
 
         <div className="flex items-center gap-1.5 px-1">
-          <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] text-muted-foreground">
-            <MessageSquare size={15} />
-            {t("chat.capability")}
-          </span>
+          {capabilityLabel && (
+            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] text-muted-foreground">
+              <MessageSquare size={15} />
+              {capabilityLabel}
+            </span>
+          )}
           <button
             type="button"
             aria-label={t("chat.attach")}
             onClick={() => fileRef.current?.click()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-white/10"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
           >
             <Paperclip size={15} />
           </button>
@@ -134,7 +155,7 @@ export function ChatComposer({
               aria-expanded={kbOpen}
               onClick={() => setKbOpen((value) => !value)}
               className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] ${
-                kbIds.length ? "text-primary" : "text-muted-foreground hover:bg-white/10"
+                kbIds.length ? "text-primary" : "text-muted-foreground hover:bg-accent"
               }`}
             >
               <Layers size={15} />
@@ -181,7 +202,7 @@ export function ChatComposer({
                 aria-label={t("chat.model")}
                 value={activeModel?.id ?? ""}
                 onChange={(event) => onModelChange(event.target.value)}
-                className="appearance-none rounded-full bg-white px-3 py-1 pr-7 text-[12px] font-medium text-black outline-none"
+                className="max-w-[190px] appearance-none rounded-full bg-foreground px-3 py-1 pr-7 text-[12px] font-medium text-background outline-none"
               >
                 {models.length === 0 && <option value="">{t("chat.noModel")}</option>}
                 {models.map((model) => (
@@ -192,7 +213,7 @@ export function ChatComposer({
               </select>
               <ChevronDown
                 size={12}
-                className="pointer-events-none absolute right-2 text-black/60"
+                className="pointer-events-none absolute right-2 text-background/60"
               />
             </label>
             <button
@@ -206,9 +227,6 @@ export function ChatComposer({
             </button>
           </div>
         </div>
-        {models.length === 0 && (
-          <p className="px-1.5 pt-2 text-[11px] text-amber-400/90">{modelLabel}</p>
-        )}
       </div>
     </div>
   );

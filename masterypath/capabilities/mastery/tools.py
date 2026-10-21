@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+import json
 import uuid
 
 from masterypath.capabilities.mastery import mode
@@ -37,6 +38,8 @@ class ToolContext:
     session_id: str = ""
     turn_id: str = ""
     end_turn: Callable[[], None] | None = None
+    bind_mode: Callable[[str], None] | None = None
+    mode_changed: bool = False
 
 
 @dataclass
@@ -51,6 +54,138 @@ def _wrong_mode_result(tool_name: str, ctx: ToolContext) -> ToolResult | None:
     if mode.tool_is_allowed(tool_name, ctx.session_mode):
         return None
     return ToolResult(ok=False, content=mode.wrong_mode_message(tool_name, ctx.session_mode))
+
+
+def _state_payload(ctx: ToolContext) -> dict[str, Any]:
+    """The tutor-facing snapshot: identity, mode, next, map and open question.
+
+    ``get_state`` reports ``next=complete`` for a path with no objectives; for
+    the tutor that is not "finished", it is "nothing has been designed yet".
+    The status is rewritten to ``empty`` so the model does not congratulate a
+    learner on an outline that does not exist.
+    """
+    state = ctx.service.get_state(ctx.path_id)
+    payload: dict[str, Any] = {
+        "status": "empty",
+        "path_id": ctx.path_id,
+        "name": state.get("name", ""),
+        "goal": state.get("goal", ""),
+        "mode": mode.normalize_mode(ctx.session_mode),
+        "next": {},
+        "map": {},
+        "pending_question": None,
+        "due_reviews": [],
+        "sources": [],
+        "learner_profile": state.get("learner_profile"),
+    }
+    if state.get("status") != "active":
+        payload["message"] = (
+            "No mastery path is active yet. Design one with mastery_build."
+        )
+        return payload
+    payload.update(
+        {
+            "next": state.get("next", {}),
+            "map": state.get("map", {}),
+            "pending_question": state.get("pending_question"),
+            "due_reviews": state.get("due_reviews", []),
+            "sources": state.get("sources", []),
+        }
+    )
+    if not payload["map"]:
+        payload["next"] = {}
+        payload["message"] = (
+            "This goal has no outline yet. Design one with mastery_build."
+        )
+        return payload
+    payload["status"] = "active"
+    return payload
+
+
+def _state_json(ctx: ToolContext) -> str:
+    return json.dumps(_state_payload(ctx), ensure_ascii=False)
+
+
+# -- shared tools ---------------------------------------------------------
+class MasteryStatusTool:
+    name = "mastery_status"
+    description = (
+        "Read the learner's mastery path: identity/goal, current mode, the next "
+        "objective chosen by the hard gate, any open question, due reviews and "
+        "the whole map with objective ids. Call this first when no current-turn "
+        "snapshot was supplied; never guess a knowledge_point_id."
+    )
+
+    def execute(self, params: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        payload = _state_payload(ctx)
+        return ToolResult(
+            ok=True,
+            content=_state_json(ctx),
+            metadata={"mastery_status": payload},
+        )
+
+
+class MasteryModeTool:
+    name = "mastery_mode"
+    description = (
+        "Switch what this conversation is doing: 'outline' to design or change "
+        "the outline, 'study' to work it forward, 'review' to re-test what is "
+        "already mastered. Call it when a refusal names another mode, and tell "
+        "the learner what you are switching to and why."
+    )
+
+    def execute(self, params: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        requested = str(params.get("mode") or "").strip().lower()
+        if requested not in mode.MODES:
+            return ToolResult(
+                ok=False,
+                content=(
+                    f"{requested!r} is not a mode. Use one of: "
+                    + ", ".join(repr(item) for item in mode.MODES)
+                    + "."
+                ),
+            )
+        progress = ctx.service.store.load(ctx.path_id)
+        has_outline = progress is not None and any(
+            module.knowledge_points for module in progress.modules
+        )
+        refusal = mode.admission_error(requested, has_outline=has_outline)
+        if refusal:
+            return ToolResult(ok=False, content=refusal)
+
+        previous = mode.normalize_mode(ctx.session_mode)
+        raw_previous = mode.enforced_mode(ctx.session_mode)
+        if ctx.bind_mode is not None:
+            ctx.bind_mode(requested)
+        else:
+            ctx.session_mode = requested
+        ctx.mode_changed = (
+            ctx.mode_changed or previous != requested or raw_previous is None
+        )
+        persisted = True
+        persistence_error = ""
+        if ctx.session_id:
+            try:
+                ctx.service.set_session_mode(ctx.path_id, ctx.session_id, requested)
+            except Exception as exc:  # noqa: BLE001 - keep the live turn switched
+                persisted = False
+                persistence_error = str(exc)
+        return ToolResult(
+            ok=True,
+            content=json.dumps(
+                {
+                    "status": "unchanged" if previous == requested else "switched",
+                    "previous_mode": previous,
+                    "mode": requested,
+                    "instructions": mode.session_frame(requested),
+                    "reason": str(params.get("reason") or "").strip()[:200],
+                    "persisted": persisted,
+                    "persistence_error": persistence_error,
+                },
+                ensure_ascii=False,
+            ),
+            metadata={"mode": requested, "previous_mode": previous, "persisted": persisted},
+        )
 
 
 def _canonical_labels(count: int) -> list[str]:
@@ -132,6 +267,11 @@ class MasteryBuildTool:
             f"Built outline with {len(result.modules)} module(s)."
             + (f" {len(result.gaps)} source gap(s) need a decision." if result.gaps else "")
         )
+        if result.status == "built":
+            state = _state_payload(ctx)
+            payload["map"] = state["map"]
+            payload["next"] = state["next"]
+            content = f"{content}\nState: {json.dumps(state, ensure_ascii=False)}"
         return ToolResult(ok=result.status == "built", content=content, metadata=payload)
 
 
@@ -149,14 +289,20 @@ class MasteryReviseTool:
             )
         except (OutlineError, PreconditionError) as exc:
             return ToolResult(ok=False, content=str(exc))
+        state = _state_payload(ctx)
         return ToolResult(
             ok=True,
-            content=f"Revised outline; applied {len(result.applied)} op(s).",
+            content=(
+                f"Revised outline; applied {len(result.applied)} op(s).\n"
+                f"State: {json.dumps(state, ensure_ascii=False)}"
+            ),
             metadata={
                 "status": result.status,
                 "applied": result.applied,
                 "dropped_kp_ids": result.dropped_kp_ids,
                 "gaps": [gap.model_dump() for gap in result.gaps],
+                "map": state["map"],
+                "next": state["next"],
             },
         )
 
@@ -479,6 +625,19 @@ class MasteryNoteGapTool:
 # explicit schema is directly assertable in tests. ``strict`` is deliberately
 # omitted — not every OpenAI-compatible provider supports it.
 TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
+    "mastery_status": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    "mastery_mode": {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": list(mode.MODES)},
+            "reason": {"type": "string"},
+        },
+        "required": ["mode"],
+    },
     "mastery_build": {
         "type": "object",
         "properties": {
@@ -622,6 +781,8 @@ def tool_definitions(tools: dict[str, Any]) -> list[dict[str, Any]]:
 
 # Tools mounted on every mastery turn (M2 + M3 + M4 + capture set).
 TOOLS = {
+    MasteryStatusTool.name: MasteryStatusTool(),
+    MasteryModeTool.name: MasteryModeTool(),
     MasteryBuildTool.name: MasteryBuildTool(),
     MasteryReviseTool.name: MasteryReviseTool(),
     MasteryQuizTool.name: MasteryQuizTool(),
@@ -634,6 +795,9 @@ TOOLS = {
     MasteryNoteGapTool.name: MasteryNoteGapTool(),
 }
 
+# Fail closed: every mounted mastery tool must be explicitly classified.
+mode.assert_classification_complete(set(TOOLS))
+
 
 __all__ = [
     "TOOLS",
@@ -642,12 +806,14 @@ __all__ = [
     "MasteryBuildTool",
     "MasteryDeferObjectiveTool",
     "MasteryGradeTool",
+    "MasteryModeTool",
     "MasteryNoteExplainedTool",
     "MasteryNoteGapTool",
     "MasteryProposeObjectiveTool",
     "MasteryQuizTool",
     "MasteryReviseTool",
     "MasterySkipQuestionTool",
+    "MasteryStatusTool",
     "ToolContext",
     "ToolResult",
     "tool_definitions",

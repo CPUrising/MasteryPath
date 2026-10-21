@@ -29,15 +29,14 @@ class StreamEvent:
 
 def _system_prompt(mode_value: Any) -> str:
     current = mode.normalize_mode(mode_value)
-    frame = {
-        mode.OUTLINE: "You are designing the learning outline with the learner.",
-        mode.STUDY: "You are teaching and checking the agreed outline.",
-        mode.REVIEW: "You are re-testing objectives the learner already mastered.",
-    }[current]
     return (
         "You are the MasteryPath tutor. Decide what to teach and ask; a "
         "deterministic engine decides whether the learner may advance. "
-        f"Current mode: {current}. {frame}"
+        f"Current mode: {current}. {mode.session_frame(current)} "
+        "Begin each turn with the mastery_status snapshot supplied by the "
+        "runtime, or call mastery_status first; never guess a knowledge_point_id "
+        "or the next objective. Trust the engine's next objective and use "
+        "mastery_mode when the learner asks for something this mode cannot do."
     )
 
 
@@ -54,9 +53,12 @@ class AgentLoop:
         *,
         system_prompt: str | None = None,
         enforce_mode_set: set[str] | None = None,
+        extra_context: str = "",
     ) -> list[StreamEvent]:
         events: list[StreamEvent] = []
         prompt = system_prompt or _system_prompt(ctx.session_mode)
+        if extra_context:
+            prompt = f"{prompt}\n\n{extra_context}"
         history: list[dict[str, Any]] = [{"role": "system", "content": prompt}, *messages]
         tool_defs = tool_definitions(self.tools)
         ended = {"value": False}
@@ -110,7 +112,12 @@ class AgentLoop:
                     if tool is None:
                         result = ToolResult(ok=False, content=f"unknown tool: {call.name}")
                     else:
-                        result = tool.execute(call.arguments, ctx)
+                        try:
+                            result = tool.execute(call.arguments, ctx)
+                        except Exception as exc:  # noqa: BLE001 - a tool must not kill the turn
+                            result = ToolResult(
+                                ok=False, content=f"tool failed: {exc}"
+                            )
                 events.append(
                     StreamEvent(
                         "tool_result",

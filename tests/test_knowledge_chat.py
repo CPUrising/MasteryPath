@@ -172,8 +172,8 @@ def test_chat_stream_persists_messages(env):
         json={"message": "What is gravity?"},
     )
     assert response.status_code == 200
-    assert '"type": "delta"' in response.text
-    assert '"type": "done"' in response.text
+    assert '"type": "text_delta"' in response.text
+    assert '"type": "turn_end"' in response.text
 
     detail = env.get(f"/chat/sessions/{session['session_id']}").json()
     roles = [message["role"] for message in detail["messages"]]

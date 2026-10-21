@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 
-import { ChatComposer, type ComposerAttachment } from "./ChatComposer";
+import { MessageComposer, type ComposerAttachment } from "@/components/common/MessageComposer";
 import { ChatMessageList } from "./ChatMessageList";
 import { WelcomeMark } from "./WelcomeMark";
 import { api } from "@/lib/api";
@@ -124,19 +124,20 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
         text,
         attachments.map((item) => ({ name: item.name, text: item.text })),
         (event) => {
-          if (event.type === "delta" && event.text) {
+          const data = event.data ?? {};
+          if (event.type === "text_delta" && typeof data.text === "string") {
             setMessages((current) =>
               current.map((message) =>
                 message.id === assistantMessage.id
-                  ? { ...message, content: message.content + event.text }
+                  ? { ...message, content: message.content + (data.text as string) }
                   : message,
               ),
             );
           } else if (event.type === "error") {
-            setError(event.message || t("chat.sendFailed"));
+            setError(typeof data.message === "string" ? data.message : t("chat.sendFailed"));
             setMessages((current) => current.filter((message) => message.id !== assistantMessage.id));
-          } else if (event.type === "done" && event.title) {
-            setSession((current) => (current ? { ...current, title: event.title! } : current));
+          } else if (event.type === "turn_end" && typeof data.title === "string" && data.title) {
+            setSession((current) => (current ? { ...current, title: data.title as string } : current));
           }
         },
       );
@@ -181,7 +182,7 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
         </p>
       )}
 
-      <ChatComposer
+      <MessageComposer
         models={models}
         modelId={modelId}
         onModelChange={changeModel}
@@ -190,6 +191,7 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
         onKbChange={changeKb}
         streaming={streaming}
         onSend={(text, attachments) => void send(text, attachments)}
+        capabilityLabel={t("chat.capability")}
       />
     </div>
   );

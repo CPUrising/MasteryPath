@@ -49,8 +49,13 @@ export const api = {
     ),
   getState: (pathId: string) =>
     fetch(`${API_BASE}/learning/paths/${pathId}`).then(json<PathState>),
-  createPath: (pathId: string, goal: string, name = "") =>
-    post<PathState>(`${API_BASE}/learning/paths`, { path_id: pathId, goal, name }),
+  createPath: (pathId: string, goal: string, name = "", knowledgeBaseIds: string[] = []) =>
+    post<PathState>(`${API_BASE}/learning/paths`, {
+      path_id: pathId,
+      goal,
+      name,
+      knowledge_base_ids: knowledgeBaseIds,
+    }),
   rename: (pathId: string, name: string) =>
     fetch(`${API_BASE}/learning/paths/${pathId}`, {
       method: "PATCH",

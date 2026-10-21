@@ -32,16 +32,9 @@ export default function MasteryAtlasPage() {
     void load();
   }, [load]);
 
-  const create = async ({ name, goal, folder }: CreateTopicInput) => {
+  const create = async ({ name, goal, knowledgeBaseIds }: CreateTopicInput) => {
     const pathId = `p${Date.now().toString(36)}`;
-    await api.createPath(pathId, goal, name);
-    if (folder) {
-      try {
-        await api.attachSources(pathId, folder);
-      } catch {
-        /* sources are optional */
-      }
-    }
+    await api.createPath(pathId, goal, name, knowledgeBaseIds);
     setWizard(false);
     router.push(masterySessionRoute(pathId, "outline"));
   };

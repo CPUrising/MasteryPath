@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator
 from masterypath.agents.llm import LLMError, OpenAICompatibleClient
 from masterypath.agents.model_resolution import build_client, resolve_llm_config
 from masterypath.chat.store import ChatStore, UnknownSession
+from masterypath.knowledge.context import knowledge_context
 from masterypath.settings.store import SettingsStore
 
 ClientFactory = Callable[[dict[str, Any]], Any]
@@ -70,28 +71,7 @@ class ChatService:
 
     # -- turns -------------------------------------------------------------
     def _knowledge_context(self, kb_ids: list[str], query: str) -> str:
-        if not self.knowledge or not kb_ids:
-            return ""
-        blocks: list[str] = []
-        for kb_id in kb_ids:
-            try:
-                hits = self.knowledge.search(kb_id, query, top_k=4)
-            except Exception:  # noqa: BLE001 - retrieval is best-effort context
-                hits = []
-            if not hits:
-                continue
-            kb_name = ""
-            try:
-                kb_name = str(self.knowledge.get(kb_id).get("name") or kb_id)
-            except Exception:  # noqa: BLE001
-                kb_name = kb_id
-            joined = "\n\n".join(
-                f"[{hit.get('source') or 'source'}]\n{hit.get('text', '')}" for hit in hits
-            )
-            blocks.append(f"# {kb_name}\n{joined}")
-        if not blocks:
-            return ""
-        return "Reference material:\n\n" + "\n\n".join(blocks)
+        return knowledge_context(self.knowledge, kb_ids, query)
 
     def stream_turn(
         self,
@@ -154,29 +134,34 @@ class ChatService:
         messages.extend(history)
 
         try:
-            config = self.resolve_model(session.get("model_id") or "")
+            preferences = session.get("preferences") or {}
+            selection = preferences.get("llm_selection")
+            if not selection and session.get("model_id"):
+                selection = {"model_id": session["model_id"]}
+            config = resolve_llm_config(self.settings, selection)
             config["session_key"] = session_id
             client = self._client_factory(config)
         except LLMError as exc:
-            yield {"type": "error", "message": str(exc)}
+            yield {"type": "error", "message": str(exc), "error_code": exc.code, "retryable": exc.retryable}
             return
 
         collected: list[str] = []
         try:
             for delta in client.stream_chat(messages):
                 collected.append(delta)
-                yield {"type": "delta", "text": delta}
+                yield {"type": "text_delta", "text": delta}
         except LLMError as exc:
             if collected:
                 self.store.add_message(session_id, "assistant", "".join(collected))
-            yield {"type": "error", "message": str(exc)}
+            yield {"type": "error", "message": str(exc), "error_code": exc.code, "retryable": exc.retryable}
             return
         answer = "".join(collected)
         if answer:
             self.store.add_message(session_id, "assistant", answer)
         current = self.store.get_session(session_id)
         yield {
-            "type": "done",
+            "type": "turn_end",
+            "reason": "done",
             "session_id": session_id,
             "title": current.get("title") or "",
         }

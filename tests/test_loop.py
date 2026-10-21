@@ -108,3 +108,27 @@ def test_loop_degrades_on_bad_arguments(ctx):
     assert tool_result.data["ok"] is False
     assert "invalid tool arguments" in tool_result.data["content"]
     assert ctx.service.get_state("p")["status"] == "missing"
+
+
+class _BoomTool:
+    name = "boom"
+    description = "always raises"
+
+    def execute(self, params, ctx):  # noqa: ANN001
+        raise RuntimeError("kaboom")
+
+
+def test_loop_survives_a_raising_tool(ctx):
+    client = FakeLLMClient(
+        [
+            LLMResponse(tool_calls=[ToolCall(name="boom", arguments={}, id="c1")]),
+            LLMResponse(text="recovered"),
+        ]
+    )
+    events = AgentLoop({"boom": _BoomTool()}).run(
+        client, [{"role": "user", "content": "x"}], ctx
+    )
+    result = next(event for event in events if event.type == "tool_result")
+    assert result.data["ok"] is False
+    assert "tool failed" in result.data["content"]
+    assert events[-1].type == "turn_end"

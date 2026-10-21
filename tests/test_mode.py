@@ -54,6 +54,18 @@ def test_tc_d9_classification_complete_and_fail_closed():
         )
 
 
+def test_every_mounted_tool_is_classified():
+    from masterypath.capabilities.mastery.tools import TOOLS
+
+    mode.assert_classification_complete(set(TOOLS))
+
+
+def test_status_and_mode_are_shared_in_every_mode():
+    for tool in ("mastery_status", "mastery_mode"):
+        for current in mode.MODES:
+            assert mode.tool_is_allowed(tool, current) is True
+
+
 def test_wrong_mode_message_names_target():
     message = mode.wrong_mode_message("mastery_quiz", mode.OUTLINE)
     assert "mastery_mode" in message

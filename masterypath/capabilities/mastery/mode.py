@@ -31,7 +31,6 @@ STUDY_REVIEW: frozenset[str] = frozenset(
         "mastery_grade",
         "mastery_assess",
         "mastery_skip_question",
-        "mastery_repair_question",
         "mastery_defer_objective",
         "mastery_note_explained",
         "mastery_propose_objective",
@@ -40,23 +39,42 @@ STUDY_REVIEW: frozenset[str] = frozenset(
 )
 
 # Explicitly shared — true regardless of mode. Listed so the guard can prove
-# every tool was classified (fail-closed, INV-17).
+# every mounted tool was classified (fail-closed, INV-17). Only tools that are
+# actually mounted belong here; add the navigation/profile tools when they land.
 SHARED_TOOLS: frozenset[str] = frozenset(
     {
         "mastery_status",
         "mastery_mode",
-        "mastery_profile",
-        "mastery_paths",
-        "mastery_switch",
-        "mastery_leave",
-        "rag",
-        "read_source",
     }
 )
 
 TOOL_MODES: dict[str, frozenset[str]] = {
     **{tool: frozenset({OUTLINE}) for tool in OUTLINE_ONLY},
     **{tool: frozenset({STUDY, REVIEW}) for tool in STUDY_REVIEW},
+}
+
+# The one block that frames what this sitting is for. Used by the system prompt
+# (which is assembled once per turn) and returned by ``mastery_mode`` (which
+# carries the new frame down inside its result after a mid-turn switch).
+MODE_INSTRUCTIONS: dict[str, str] = {
+    OUTLINE: (
+        "This mode is for designing the learning outline with the learner. "
+        "Do not teach or examine: mastery_quiz, mastery_grade and mastery_assess "
+        "are refused here. Build the first outline with mastery_build, or reshape "
+        "an existing one with mastery_revise. When the learner is ready to begin, "
+        "switch to study with mastery_mode."
+    ),
+    STUDY: (
+        "This mode is for teaching and working the agreed outline forward, one "
+        "objective at a time, through its hard mastery gate. Do not change the "
+        "outline here: mastery_build and mastery_revise belong to outline mode. "
+        "When the learner asks to review, switch to review with mastery_mode."
+    ),
+    REVIEW: (
+        "This mode is for re-testing objectives the learner has already mastered. "
+        "Quiz or assess only mastered objectives; the engine refuses new ones. "
+        "Do not teach new content here: switch to study with mastery_mode."
+    ),
 }
 
 
@@ -71,6 +89,11 @@ def normalize_mode(value: Any) -> str:
     """The mode to *show and frame with*, always one of MODES."""
     candidate = str(value or "").strip().lower()
     return candidate if candidate in MODES else DEFAULT_MODE
+
+
+def session_frame(value: Any) -> str:
+    """The mode-specific prompt block for the conversation's current mode."""
+    return MODE_INSTRUCTIONS[normalize_mode(value)]
 
 
 def enforced_mode(value: Any) -> str | None:
@@ -138,6 +161,7 @@ def assert_classification_complete(tool_names: set[str] | None = None) -> None:
 __all__ = [
     "DEFAULT_MODE",
     "MODES",
+    "MODE_INSTRUCTIONS",
     "OUTLINE",
     "OUTLINE_ONLY",
     "REVIEW",
@@ -151,6 +175,7 @@ __all__ = [
     "enforced_mode",
     "normalize_mode",
     "owning_modes",
+    "session_frame",
     "tool_is_allowed",
     "wrong_mode_message",
 ]
