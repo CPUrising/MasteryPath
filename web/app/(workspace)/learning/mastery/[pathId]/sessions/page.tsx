@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
@@ -57,6 +57,11 @@ function StudyRoute() {
   const [selection, setSelection] = useState<LLMSelection | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [kbIds, setKbIds] = useState<string[]>([]);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [items, busy]);
 
   useEffect(() => {
     knowledgeApi.list().then(setKnowledgeBases).catch(() => setKnowledgeBases([]));
@@ -162,9 +167,36 @@ function StudyRoute() {
   const send = useCallback(
     async (text: string) => {
       setBusy(true);
-      setItems((previous) => [...previous, { role: "user", text }]);
+      setItems((previous) => [
+        ...previous,
+        { role: "user", text },
+        { role: "assistant", text: "" },
+      ]);
       let assistant = "";
       let reported = false;
+      const appendAssistant = (delta: string) => {
+        if (!delta) return;
+        assistant += delta;
+        setItems((previous) => {
+          const next = [...previous];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, text: last.text + delta };
+          }
+          return next;
+        });
+      };
+      const replaceAssistant = (value: string) => {
+        assistant = value;
+        setItems((previous) => {
+          const next = [...previous];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, text: value };
+          }
+          return next;
+        });
+      };
       try {
         await runTurn(
           {
@@ -175,21 +207,34 @@ function StudyRoute() {
             llm_selection: selection ?? undefined,
           },
           (event) => {
-            if (event.type === "text_delta") assistant += String(event.data.text ?? "");
+            if (event.type === "text_delta") {
+              appendAssistant(String(event.data.text ?? ""));
+            }
             if (event.type === "session_meta") {
               const next = event.data.mastery_session_mode;
               if (typeof next === "string") setMode(normalizeMode(next));
             }
             if (event.type === "error") {
-              assistant = String(event.data.message ?? "");
+              const message = String(event.data.message ?? "");
+              replaceAssistant(assistant ? `${assistant}\n\n${message}` : message);
               reported = true;
             }
           },
         );
       } catch (reason) {
-        if (!reported) assistant = `${t("study.noProvider")} (${String(reason)})`;
+        if (!reported) {
+          const message = `${t("study.noProvider")} (${String(reason)})`;
+          replaceAssistant(assistant ? `${assistant}\n\n${message}` : message);
+        }
       }
-      setItems((previous) => [...previous, { role: "assistant", text: assistant }]);
+      if (!assistant) {
+        setItems((previous) => {
+          const next = [...previous];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && !last.text) next.pop();
+          return next;
+        });
+      }
       await load().catch(() => undefined);
       setBusy(false);
     },
@@ -275,6 +320,7 @@ function StudyRoute() {
                   )}
                 </div>
               )}
+              <div ref={bottomRef} />
             </div>
           </div>
           <MessageComposer

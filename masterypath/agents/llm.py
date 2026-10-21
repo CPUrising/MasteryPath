@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 import uuid
 
 import httpx
@@ -27,6 +27,18 @@ class ToolCall:
 
 @dataclass
 class LLMResponse:
+    text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+@dataclass
+class StreamChunk:
+    """One piece of a streaming completion.
+
+    Text chunks arrive as the provider produces them. Tool calls are assembled
+    by the adapter and delivered once, at the end of the stream.
+    """
+
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
 
@@ -77,6 +89,75 @@ def _http_error(status_code: int) -> LLMError:
     )
 
 
+def parse_stream_lines(lines: Iterable[str]) -> Iterator[StreamChunk]:
+    """Parse OpenAI-compatible SSE lines into text and assembled tool calls.
+
+    Providers stream tool calls as fragments: ``index`` identifies the call,
+    ``id``/``name`` usually arrive once and ``arguments`` arrives in pieces.
+    Text is yielded immediately; the complete tool-call list is yielded once,
+    after ``[DONE]`` or the end of the body.
+    """
+    calls: dict[int, dict[str, str]] = {}
+    for line in lines:
+        if not line or not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+            choice = payload["choices"][0]
+        except (ValueError, KeyError, IndexError, TypeError):
+            continue
+        delta = choice.get("delta") or {}
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            yield StreamChunk(text=content)
+        for raw in delta.get("tool_calls") or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                index = int(raw.get("index", 0))
+            except (TypeError, ValueError):
+                index = 0
+            entry = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            if raw.get("id"):
+                entry["id"] = str(raw["id"])
+            function = raw.get("function") or {}
+            if function.get("name"):
+                entry["name"] = str(function["name"])
+            if function.get("arguments"):
+                entry["arguments"] += str(function["arguments"])
+
+    if not calls:
+        return
+    assembled: list[ToolCall] = []
+    for index in sorted(calls):
+        entry = calls[index]
+        raw_arguments = entry["arguments"]
+        if raw_arguments:
+            try:
+                arguments = json.loads(raw_arguments)
+                parse_error = not isinstance(arguments, dict)
+                if parse_error:
+                    arguments = {}
+            except (ValueError, TypeError):
+                arguments = {}
+                parse_error = True
+        else:
+            arguments = {}
+            parse_error = False
+        assembled.append(
+            ToolCall(
+                name=entry["name"],
+                arguments=arguments,
+                id=entry["id"] or f"call-{index}",
+                parse_error=parse_error or not entry["name"],
+            )
+        )
+    yield StreamChunk(tool_calls=assembled)
+
+
 class LLMClient(Protocol):
     def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -87,15 +168,17 @@ class FakeLLMClient:
     """Scripted client: returns pre-canned responses in order (offline tests).
 
     ``tools_seen`` records the tool definitions passed on each call so tests can
-    assert the schema actually reaches the client.
+    assert the schema actually reaches the client. ``chunk_size`` splits text
+    into multiple stream chunks (0 = one chunk) so streaming can be tested.
     """
 
-    def __init__(self, script: list[LLMResponse]) -> None:
+    def __init__(self, script: list[LLMResponse], *, chunk_size: int = 0) -> None:
         self._script = list(script)
+        self.chunk_size = chunk_size
         self.calls: list[list[dict[str, Any]]] = []
         self.tools_seen: list[list[dict[str, Any]]] = []
 
-    def chat(
+    def _next(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> LLMResponse:
         self.calls.append(list(messages))
@@ -103,6 +186,29 @@ class FakeLLMClient:
         if not self._script:
             return LLMResponse(text="(no more scripted responses)")
         return self._script.pop(0)
+
+    def chat(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> LLMResponse:
+        return self._next(messages, tools)
+
+    def stream_chat_events(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> Iterator[StreamChunk]:
+        response = self._next(messages, tools or [])
+        if response.text:
+            if self.chunk_size > 0:
+                for start in range(0, len(response.text), self.chunk_size):
+                    yield StreamChunk(text=response.text[start : start + self.chunk_size])
+            else:
+                yield StreamChunk(text=response.text)
+        if response.tool_calls:
+            yield StreamChunk(tool_calls=list(response.tool_calls))
+
+    def stream_chat(self, messages: list[dict[str, Any]]) -> Iterator[str]:
+        for chunk in self.stream_chat_events(messages, None):
+            if chunk.text:
+                yield chunk.text
 
 
 class DeepSeekClient:
@@ -124,6 +230,15 @@ class DeepSeekClient:
             api_key=self.api_key or "",
             model=self.model,
         ).chat(messages, tools)
+
+    def stream_chat_events(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> Iterator[StreamChunk]:
+        yield from OpenAICompatibleClient(
+            base_url="https://api.deepseek.com",
+            api_key=self.api_key or "",
+            model=self.model,
+        ).stream_chat_events(messages, tools)
 
 
 
@@ -245,10 +360,17 @@ class OpenAICompatibleClient:
             )
         return LLMResponse(text=str(message.get("content") or ""), tool_calls=calls)
 
-    def stream_chat(self, messages: list[dict[str, Any]]) -> Iterator[str]:
-        """Yield text deltas from a streaming chat completion."""
+    def stream_chat_events(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Iterator[StreamChunk]:
+        """Yield text as it arrives, then the assembled tool calls (if any)."""
         self._require_config()
         body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         try:
             with httpx.stream(
                 "POST",
@@ -259,25 +381,19 @@ class OpenAICompatibleClient:
             ) as response:
                 if response.status_code != 200:
                     raise _http_error(response.status_code)
-                for line in response.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:") :].strip()
-                    if data == "[DONE]":
-                        return
-                    try:
-                        payload = json.loads(data)
-                        delta = payload["choices"][0]["delta"].get("content")
-                    except (ValueError, KeyError, IndexError, TypeError):
-                        continue
-                    if delta:
-                        yield str(delta)
+                yield from parse_stream_lines(response.iter_lines())
         except httpx.TimeoutException as exc:
             raise LLMError(
                 "The model provider timed out.", code="upstream_error", retryable=True
             ) from exc
         except httpx.HTTPError as exc:
             raise LLMError("Could not reach the model provider.", code="upstream_error") from exc
+
+    def stream_chat(self, messages: list[dict[str, Any]]) -> Iterator[str]:
+        """Yield text deltas from a streaming chat completion."""
+        for chunk in self.stream_chat_events(messages, None):
+            if chunk.text:
+                yield chunk.text
 
 
 __all__ = [
@@ -287,5 +403,7 @@ __all__ = [
     "LLMError",
     "LLMResponse",
     "OpenAICompatibleClient",
+    "StreamChunk",
     "ToolCall",
+    "parse_stream_lines",
 ]

@@ -145,15 +145,32 @@ class TurnRunner:
                         f"\n\n{context}" if context else ""
                     )
         loop = AgentLoop(TOOLS)
+        events: list[Any] = []
         try:
             client = self.client_builder(selection, request.session_id)
-            events = loop.run(
+            for event in loop.stream(
                 client,
                 [{"role": "user", "content": request.message}],
                 ctx,
                 extra_context=context,
-            )
+            ):
+                events.append(event)
+                yield TurnEvent(event.type, dict(event.data))
+                if event.type == "tool_result":
+                    card = (event.data.get("metadata") or {}).get(QUESTION_CARD_KEY)
+                    if card:
+                        yield TurnEvent("question_card", dict(card))
         except LLMError as exc:
+            self._finish_interrupted_turn(request, events, ctx)
+            if ctx.mode_changed:
+                yield TurnEvent(
+                    "session_meta",
+                    {
+                        "mastery_session_mode": mode_policy.normalize_mode(
+                            ctx.session_mode
+                        )
+                    },
+                )
             yield TurnEvent(
                 "error",
                 {
@@ -165,6 +182,16 @@ class TurnRunner:
             return
         except Exception as exc:  # noqa: BLE001 - never close the socket silently
             logger.exception("mastery turn failed")
+            self._finish_interrupted_turn(request, events, ctx)
+            if ctx.mode_changed:
+                yield TurnEvent(
+                    "session_meta",
+                    {
+                        "mastery_session_mode": mode_policy.normalize_mode(
+                            ctx.session_mode
+                        )
+                    },
+                )
             yield TurnEvent(
                 "error",
                 {
@@ -175,17 +202,28 @@ class TurnRunner:
             )
             return
 
-        for event in events:
-            yield TurnEvent(event.type, dict(event.data))
-            if event.type == "tool_result":
-                card = (event.data.get("metadata") or {}).get(QUESTION_CARD_KEY)
-                if card:
-                    yield TurnEvent("question_card", dict(card))
-
         final_mode = mode_policy.normalize_mode(ctx.session_mode)
         if ctx.mode_changed:
             yield TurnEvent("session_meta", {"mastery_session_mode": final_mode})
         self._persist_mastery_turn(request, events, final_mode=final_mode)
+
+    def _finish_interrupted_turn(
+        self, request: TurnRequest, events: list[Any], ctx: ToolContext
+    ) -> None:
+        """Persist what streamed before an error; never lose visible text."""
+        has_text = any(
+            event.type == "text_delta" and str(event.data.get("text", ""))
+            for event in events
+        )
+        has_card = any(
+            (event.data.get("metadata") or {}).get(QUESTION_CARD_KEY)
+            for event in events
+            if event.type == "tool_result"
+        )
+        if has_text or has_card:
+            self._persist_mastery_turn(
+                request, events, final_mode=mode_policy.normalize_mode(ctx.session_mode)
+            )
 
     def _persist_mastery_turn(
         self,

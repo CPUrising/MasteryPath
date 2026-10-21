@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from masterypath.agents.llm import FakeLLMClient, LLMError, LLMResponse, ToolCall
+from masterypath.agents.llm import (
+    FakeLLMClient,
+    LLMError,
+    LLMResponse,
+    StreamChunk,
+    ToolCall,
+)
 from masterypath.api.app import create_app
 from masterypath.learning.storage import LearningStore
 
@@ -201,3 +207,58 @@ def test_create_path_with_knowledge_bases(tmp_path):
     store.close()
     assert [item["id"] for item in state["knowledge_bases"]] == [kb["id"]]
 
+
+class _PartialBoomClient:
+    def stream_chat_events(self, messages, tools=None):  # noqa: ANN001
+        yield StreamChunk(text="partial answer")
+        raise LLMError("stream broke", code="upstream_error")
+
+
+def test_ws_keeps_partial_text_when_the_stream_fails(tmp_path):
+    store = LearningStore(tmp_path)
+    app = create_app(store, client_factory=lambda: _PartialBoomClient())
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json(
+                {"session_id": "s1", "path_id": "p", "mode": "outline", "message": "hi"}
+            )
+            events = []
+            while True:
+                try:
+                    events.append(ws.receive_json())
+                except Exception:
+                    break
+        types = [event["type"] for event in events]
+        assert "text_delta" in types
+        assert types[-1] == "error"
+        detail = client.get("/learning/sessions/s1").json()
+        assert [message["role"] for message in detail["messages"]] == [
+            "user",
+            "assistant",
+        ]
+        assert detail["messages"][1]["content"] == "partial answer"
+    store.close()
+
+def test_ws_forwards_incremental_text_frames(tmp_path):
+    store = LearningStore(tmp_path)
+    fake = FakeLLMClient([LLMResponse(text="hello world")], chunk_size=3)
+    app = create_app(store, client_factory=lambda: fake)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json(
+                {"session_id": "s1", "path_id": "p", "mode": "outline", "message": "hi"}
+            )
+            events = []
+            while True:
+                try:
+                    events.append(ws.receive_json())
+                except Exception:
+                    break
+        deltas = [
+            event["data"]["text"]
+            for event in events
+            if event["type"] == "text_delta"
+        ]
+        assert "".join(deltas) == "hello world"
+        assert len(deltas) >= 2
+    store.close()

@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 from masterypath.agents import llm as llm_mod
-from masterypath.agents.llm import LLMError, OpenAICompatibleClient
+from masterypath.agents.llm import (
+    LLMError,
+    OpenAICompatibleClient,
+    ToolCall,
+    parse_stream_lines,
+)
 from masterypath.capabilities.mastery.tools import TOOL_PARAMETERS, TOOLS, tool_definitions
 
 
@@ -150,3 +155,162 @@ def test_explicit_extra_headers_win():
     headers = client._headers()
     assert headers["x-opencode-session"] == "explicit"
     assert headers["x-other"] == "1"
+
+def _sse(*payloads, done=True):
+    lines: list[str] = []
+    for payload in payloads:
+        lines.append("data: " + json.dumps(payload))
+        lines.append("")
+    if done:
+        lines.append("data: [DONE]")
+        lines.append("")
+    return lines
+
+
+def test_stream_parser_yields_text_then_assembles_tool_call_fragments():
+    chunks = list(
+        parse_stream_lines(
+            _sse(
+                {"choices": [{"delta": {"content": "Hel"}}]},
+                {"choices": [{"delta": {"content": "lo"}}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "mastery_quiz",
+                                            "arguments": '{"knowledge',
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {
+                                            "arguments": '_point_id": "k1"}'
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+        )
+    )
+
+    assert [chunk.text for chunk in chunks if chunk.text] == ["Hel", "lo"]
+    call = chunks[-1].tool_calls[0]
+    assert call.name == "mastery_quiz"
+    assert call.id == "call-1"
+    assert call.arguments == {"knowledge_point_id": "k1"}
+    assert call.parse_error is False
+
+
+def test_stream_parser_marks_invalid_arguments_and_supplies_an_id():
+    chunks = list(
+        parse_stream_lines(
+            _sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 2,
+                                        "function": {
+                                            "name": "mastery_grade",
+                                            "arguments": "not json",
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+    )
+
+    call = chunks[-1].tool_calls[0]
+    assert call.parse_error is True
+    assert call.arguments == {}
+    assert call.id == "call-2"
+
+
+class _StreamResponse:
+    status_code = 200
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+def test_stream_chat_events_sends_stream_and_tools(monkeypatch):
+    seen: dict = {}
+
+    def _stream(_method, _url, **kwargs):
+        seen["body"] = kwargs["json"]
+        return _StreamResponse(
+            _sse(
+                {"choices": [{"delta": {"content": "hi"}}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "mastery_status",
+                                            "arguments": "{}",
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+        )
+
+    monkeypatch.setattr(llm_mod.httpx, "stream", _stream)
+    client = OpenAICompatibleClient(base_url="https://x/v1", api_key="k", model="m")
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "mastery_status", "parameters": {"type": "object"}},
+        }
+    ]
+    chunks = list(
+        client.stream_chat_events([{"role": "user", "content": "hi"}], tools)
+    )
+
+    assert seen["body"]["stream"] is True
+    assert seen["body"]["tools"] == tools
+    assert seen["body"]["tool_choice"] == "auto"
+    assert [chunk.text for chunk in chunks if chunk.text] == ["hi"]
+    assert chunks[-1].tool_calls[0] == ToolCall(
+        name="mastery_status", arguments={}, id="call-1", parse_error=False
+    )

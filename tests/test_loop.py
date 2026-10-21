@@ -132,3 +132,40 @@ def test_loop_survives_a_raising_tool(ctx):
     assert result.data["ok"] is False
     assert "tool failed" in result.data["content"]
     assert events[-1].type == "turn_end"
+
+def test_loop_streams_text_before_running_a_tool(ctx):
+    client = FakeLLMClient(
+        [
+            LLMResponse(text="Let me check. ", tool_calls=[_build_call()]),
+            LLMResponse(text="Outline ready."),
+        ],
+        chunk_size=4,
+    )
+    stream = AgentLoop(TOOLS).stream(
+        client, [{"role": "user", "content": "teach me X"}], ctx
+    )
+
+    first = next(stream)
+    assert first.type == "text_delta"
+    assert first.data["text"] == "Let "
+    # The lead-in reached the caller before the tool ran.
+    assert ctx.service.get_state("p")["status"] == "missing"
+
+    rest = list(stream)
+    types = [event.type for event in rest]
+    assert "tool_call" in types and "tool_result" in types
+    assert ctx.service.get_state("p")["map"]
+    assert rest[-1].type == "turn_end"
+
+
+def test_loop_falls_back_to_chat_for_a_client_without_streaming(ctx):
+    class PlainClient:
+        def chat(self, messages, tools):  # noqa: ANN001
+            return LLMResponse(text="plain answer")
+
+    events = AgentLoop(TOOLS).run(
+        PlainClient(), [{"role": "user", "content": "x"}], ctx
+    )
+
+    assert [event.type for event in events] == ["text_delta", "turn_end"]
+    assert events[0].data["text"] == "plain answer"

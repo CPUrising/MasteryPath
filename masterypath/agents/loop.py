@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-from typing import Any
+from typing import Any, Iterator
 
 from masterypath.agents.llm import LLMClient
 from masterypath.capabilities.mastery import behavior, mode
@@ -55,7 +55,26 @@ class AgentLoop:
         enforce_mode_set: set[str] | None = None,
         extra_context: str = "",
     ) -> list[StreamEvent]:
-        events: list[StreamEvent] = []
+        return list(
+            self.stream(
+                client,
+                messages,
+                ctx,
+                system_prompt=system_prompt,
+                extra_context=extra_context,
+            )
+        )
+
+    def stream(
+        self,
+        client: LLMClient,
+        messages: list[dict[str, Any]],
+        ctx: ToolContext,
+        *,
+        system_prompt: str | None = None,
+        extra_context: str = "",
+    ) -> Iterator[StreamEvent]:
+        """Yield events as the model produces them, round by round."""
         prompt = system_prompt or _system_prompt(ctx.session_mode)
         if extra_context:
             prompt = f"{prompt}\n\n{extra_context}"
@@ -63,21 +82,37 @@ class AgentLoop:
         tool_defs = tool_definitions(self.tools)
         ended = {"value": False}
         ctx.end_turn = lambda: ended.__setitem__("value", True)
-        tool_calls = 0
+        call_count = 0
 
         for _ in range(self.max_rounds):
-            response = client.chat(history, tool_defs)
-            if response.text:
-                events.append(StreamEvent("text_delta", {"text": response.text}))
-            if not response.tool_calls:
-                events.append(StreamEvent("turn_end", {"reason": "done"}))
-                return events
+            round_text = ""
+            calls: list[Any] = []
+            streamer = getattr(client, "stream_chat_events", None)
+            if streamer is not None:
+                for chunk in streamer(history, tool_defs):
+                    if chunk.text:
+                        round_text += chunk.text
+                        yield StreamEvent("text_delta", {"text": chunk.text})
+                    if chunk.tool_calls:
+                        calls.extend(chunk.tool_calls)
+            else:
+                # Older/test clients only implement chat: deliver the whole
+                # answer as one delta rather than breaking the turn.
+                response = client.chat(history, tool_defs)
+                if response.text:
+                    round_text = response.text
+                    yield StreamEvent("text_delta", {"text": response.text})
+                calls.extend(response.tool_calls)
+
+            if not calls:
+                yield StreamEvent("turn_end", {"reason": "done"})
+                return
             # OpenAI requires the assistant turn that requested the calls to be
             # present before its tool results.
             history.append(
                 {
                     "role": "assistant",
-                    "content": response.text or None,
+                    "content": round_text or None,
                     "tool_calls": [
                         {
                             "id": call.id,
@@ -87,21 +122,19 @@ class AgentLoop:
                                 "arguments": json.dumps(call.arguments),
                             },
                         }
-                        for call in response.tool_calls
+                        for call in calls
                     ],
                 }
             )
-            for call in response.tool_calls:
-                tool_calls += 1
-                if tool_calls > behavior.MAX_TOOL_CALLS_PER_TURN:
+            for call in calls:
+                call_count += 1
+                if call_count > behavior.MAX_TOOL_CALLS_PER_TURN:
                     # Behavior budget (INV-60): stop making calls this turn.
-                    events.append(StreamEvent("turn_end", {"reason": "budget"}))
-                    return events
-                events.append(
-                    StreamEvent(
-                        "tool_call",
-                        {"name": call.name, "arguments": call.arguments},
-                    )
+                    yield StreamEvent("turn_end", {"reason": "budget"})
+                    return
+                yield StreamEvent(
+                    "tool_call",
+                    {"name": call.name, "arguments": call.arguments},
                 )
                 if call.parse_error:
                     # The provider sent malformed arguments: answer with a failed
@@ -118,16 +151,14 @@ class AgentLoop:
                             result = ToolResult(
                                 ok=False, content=f"tool failed: {exc}"
                             )
-                events.append(
-                    StreamEvent(
-                        "tool_result",
-                        {
-                            "name": call.name,
-                            "ok": result.ok,
-                            "content": result.content,
-                            "metadata": result.metadata,
-                        },
-                    )
+                yield StreamEvent(
+                    "tool_result",
+                    {
+                        "name": call.name,
+                        "ok": result.ok,
+                        "content": result.content,
+                        "metadata": result.metadata,
+                    },
                 )
                 history.append(
                     {
@@ -139,10 +170,9 @@ class AgentLoop:
                 if ended["value"]:
                     # Posing a question ends the turn (INV-44): the learner's
                     # answer arrives as the next message.
-                    events.append(StreamEvent("turn_end", {"reason": "card"}))
-                    return events
-        events.append(StreamEvent("turn_end", {"reason": "max_rounds"}))
-        return events
+                    yield StreamEvent("turn_end", {"reason": "card"})
+                    return
+        yield StreamEvent("turn_end", {"reason": "max_rounds"})
 
 
 __all__ = ["AgentLoop", "StreamEvent"]
