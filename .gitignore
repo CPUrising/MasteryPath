@@ -56,3 +56,5 @@ SRS.md
 package-lock.json
 web/cd
 web/npm
+
+image/
